@@ -549,6 +549,83 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === 'GET' && req.url.startsWith('/api/tidal/browse?')) {
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      const cid = url.searchParams.get('cid');
+
+      if (!cid || !cid.trim()) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: 'Missing cid' }));
+        return;
+      }
+
+      const heosCid =
+        encodeURIComponent(cid.trim()).replace(/%20/g, ' ');
+
+      const pageSize = 50;
+      const allItems = [];
+      let start = 0;
+      let total = null;
+
+      while (total === null || start < total) {
+        const end = start + pageSize - 1;
+
+        const response = await heosBrowse(
+          'heos://browse/browse?sid=10&cid=' +
+          heosCid +
+          '&range=' + start + ',' + end
+        );
+
+        const payload = Array.isArray(response.payload)
+          ? response.payload
+          : [];
+
+        allItems.push(...payload);
+
+        const message =
+          response.heos && response.heos.message
+            ? response.heos.message
+            : '';
+
+        const countMatch = message.match(/(?:^|&)count=(\d+)/);
+
+        if (countMatch) {
+          total = Number(countMatch[1]);
+        }
+
+        if (!payload.length) break;
+
+        start += payload.length;
+
+        if (total === null && payload.length < pageSize) break;
+      }
+
+      const items = allItems.map(item => ({
+        name: item.name || '',
+        cid: item.cid || '',
+        mid: item.mid || '',
+        type: item.type || '',
+        container: item.container === 'yes',
+        playable: item.playable === 'yes',
+        artist: item.artist || '',
+        albumId: item.album_id || '',
+        imageUrl: item.image_url || ''
+      }));
+
+      res.writeHead(200);
+      res.end(JSON.stringify({
+        ok: true,
+        items,
+        count: items.length
+      }));
+    } catch (error) {
+      res.writeHead(500);
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
   if (req.method === 'GET' && req.url.startsWith('/api/tidal/search?')) {
     try {
       const url = new URL(req.url, 'http://localhost');
