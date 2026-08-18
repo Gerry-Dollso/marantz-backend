@@ -563,6 +563,50 @@ const server = http.createServer(async (req, res) => {
       const heosCid =
         encodeURIComponent(cid.trim()).replace(/%20/g, ' ');
 
+      if (url.searchParams.has('start') || url.searchParams.has('limit')) {
+        const pageStart = Math.max(
+          0,
+          Number(url.searchParams.get('start')) || 0
+        );
+        const pageLimit = Math.min(
+          100,
+          Math.max(1, Number(url.searchParams.get('limit')) || 50)
+        );
+        const pageEnd = pageStart + pageLimit - 1;
+
+        const response = await heosBrowse(
+          'heos://browse/browse?sid=10&cid=' +
+          heosCid +
+          '&range=' + pageStart + ',' + pageEnd
+        );
+
+        const message = response.heos?.message || '';
+        const countMatch = message.match(/(?:^|&)count=(\d+)/);
+        const total = countMatch ? Number(countMatch[1]) : null;
+
+        const items = (response.payload || []).map(item => ({
+          name: item.name || '',
+          cid: item.cid || '',
+          mid: item.mid || '',
+          type: item.type || '',
+          container: item.container === 'yes',
+          playable: item.playable === 'yes',
+          artist: item.artist || '',
+          albumId: item.album_id || '',
+          imageUrl: item.image_url || ''
+        }));
+
+        res.writeHead(200);
+        res.end(JSON.stringify({
+          ok: true,
+          items,
+          count: total,
+          start: pageStart,
+          limit: pageLimit
+        }));
+        return;
+      }
+
       const pageSize = 50;
       const allItems = [];
       let start = 0;
@@ -835,6 +879,53 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({
         error: error.message
       }));
+    }
+    return;
+  }
+
+  if (req.method === 'GET' && req.url.startsWith('/api/tidal/playlist/play?')) {
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      const cid = url.searchParams.get('cid');
+      const selectedMid = url.searchParams.get('mid');
+      const shuffle = url.searchParams.get('shuffle') === '1';
+
+      if (!cid) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: 'Missing playlist cid' }));
+        return;
+      }
+
+      let command =
+        'heos://browse/add_to_queue?' +
+        'pid=' + encodeURIComponent(PLAYER_ID) +
+        '&sid=10' +
+        '&cid=' + encodeURIComponent(cid);
+
+      if (selectedMid) {
+        command +=
+          '&mid=' + encodeURIComponent(selectedMid);
+      }
+
+      command += '&aid=4';
+
+      await heosBrowse(command);
+
+      await heosBrowse(
+        'heos://player/set_play_mode?' +
+        'pid=' + encodeURIComponent(PLAYER_ID) +
+        '&shuffle=' + (shuffle ? 'on' : 'off')
+      );
+
+      res.writeHead(200);
+      res.end(JSON.stringify({
+        ok: true,
+        selectedMid: selectedMid || null,
+        shuffle
+      }));
+    } catch (error) {
+      res.writeHead(500);
+      res.end(JSON.stringify({ error: error.message }));
     }
     return;
   }
