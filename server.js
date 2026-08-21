@@ -49,51 +49,7 @@ function avr(command, prefix) {
   );
 }
 
-async function getHeosNowPlaying() {
-  return new Promise((resolve, reject) => {
-    const socket = net.createConnection({ host: AVR_HOST, port: HEOS_PORT });
-    let buffer = '';
-    let settled = false;
-
-    function finish(error, value) {
-      if (settled) return;
-      settled = true;
-      socket.destroy();
-      error ? reject(error) : resolve(value);
-    }
-
-    socket.setTimeout(3000);
-    socket.on('connect', () => {
-      socket.write(`heos://player/get_now_playing_media?pid=${PLAYER_ID}\r\n`);
-    });
-    socket.on('data', chunk => {
-      buffer += chunk.toString('utf8');
-      if (!buffer.includes('\n')) return;
-      const line = buffer.split('\n')[0].trim();
-      try {
-        finish(null, JSON.parse(line));
-      } catch {
-        finish(new Error('Invalid HEOS response'));
-      }
-    });
-    socket.on('timeout', () => finish(new Error('HEOS request timed out')));
-    socket.on('error', finish);
-  });
-}
-
-async function getStatus() {
-  const [power, input, volume, mute, heos] = await Promise.all([
-    avr('ZM?', 'ZM'),
-    avr('SI?', 'SI'),
-    avr('MV?', 'MV'),
-    avr('MU?', 'MU'),
-    getHeosNowPlaying()
-  ]);
-
-  return { avr: { power, input, volume, mute }, heos };
-}
-
-async function heosBrowse(command, timeoutMs = 5000) {
+function heosBrowse(command, timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection({ host: AVR_HOST, port: HEOS_PORT });
     let buffer = '';
@@ -143,6 +99,25 @@ async function heosBrowse(command, timeoutMs = 5000) {
       if (!finished) finish(new Error('HEOS connection closed'));
     });
   });
+}
+
+function getHeosNowPlaying() {
+  return heosBrowse(
+    `heos://player/get_now_playing_media?pid=${PLAYER_ID}`,
+    3000
+  );
+}
+
+async function getStatus() {
+  const [power, input, volume, mute, heos] = await Promise.all([
+    avr('ZM?', 'ZM'),
+    avr('SI?', 'SI'),
+    avr('MV?', 'MV'),
+    avr('MU?', 'MU'),
+    getHeosNowPlaying()
+  ]);
+
+  return { avr: { power, input, volume, mute }, heos };
 }
 
 function sendJson(res, statusCode, value) {
