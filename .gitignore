@@ -1,2 +1,5 @@
 server.js.before-*
 server.js.phase-*
+*.backup-*
+*.log
+.env
