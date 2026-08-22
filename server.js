@@ -485,6 +485,8 @@ async function semanticCommandControl(command) {
 
   if (
     text === 'unmute' ||
+    text === 'un mute' ||
+    text === 'on mute' ||
     text === 'unmute it' ||
     text === 'unmute the marantz'
   ) {
