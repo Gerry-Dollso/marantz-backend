@@ -15,9 +15,20 @@ The Raspberry Pi currently uses these endpoints:
 
 The backend talks to HEOS on TCP port 1255 and listens for HTTP requests on port 3100.
 
-## Legacy control endpoints
+## Semantic control API
 
-`server.js` still contains older AVR / HEOS control endpoints from the first backend iterations. The current marantzPI controller performs receiver, transport, volume, zone and seek control locally on the Raspberry Pi, so those older backend routes are not part of the active marantzPI request path. They have intentionally been left in place during this conservative housekeeping pass until the cleaned branches have been tested end-to-end.
+The backend also provides a semantic AVR / HEOS control layer intended for orchestration and future voice control:
+
+- `POST /api/control/power?state=on|standby`
+- `POST /api/control/source?source=phono|cd|heos|tidal|tv|aux`
+- `POST /api/control/volume?action=up|down`
+- `POST /api/control/volume?action=set&value=<dB>`
+- `POST /api/control/mute?state=on|off|toggle`
+- `POST /api/control/transport?action=play|pause|next|previous`
+
+These routes expose user-level intentions rather than raw Marantz commands. Source mappings remain backend policy; for example, `phono` recalls Smart Select 1, which selects the receiver's renamed 8K input rather than the physical PHONO input.
+
+The marantzPI touchscreen continues to perform its existing receiver controls locally. The semantic backend layer is additive and is intended for external orchestration such as voice control.
 
 ## Housekeeping policy
 

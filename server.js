@@ -120,6 +120,324 @@ async function getStatus() {
   return { avr: { power, input, volume, mute }, heos };
 }
 
+function sleep(milliseconds) {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+function parseReceiverVolume(line) {
+  if (!line || !line.startsWith('MV')) return null;
+
+  const value = line.slice(2);
+  if (!/^\d{2,3}$/.test(value)) return null;
+
+  const receiverValue =
+    value.length === 3 ? Number(value) / 10 : Number(value);
+
+  return receiverValue - 80;
+}
+
+function normaliseVolume(value) {
+  if (value === null || value === undefined || value === '') {
+    throw new Error('Missing receiver volume');
+  }
+
+  const numeric = Number(value);
+
+  if (!Number.isFinite(numeric)) {
+    throw new Error('Invalid receiver volume');
+  }
+
+  return Math.min(
+    18,
+    Math.max(-80, Math.round(numeric * 2) / 2)
+  );
+}
+
+function marantzVolumeCommand(value) {
+  const volume = normaliseVolume(value);
+  const receiverValue = volume + 80;
+
+  const encoded = Number.isInteger(receiverValue)
+    ? String(receiverValue).padStart(2, '0')
+    : String(Math.round(receiverValue * 10)).padStart(3, '0');
+
+  return `MV${encoded}`;
+}
+
+async function avrSet(command, timeoutMs = 2000) {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection({
+      host: AVR_HOST,
+      port: AVR_PORT
+    });
+
+    let settled = false;
+
+    function finish(error, value) {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      error ? reject(error) : resolve(value);
+    }
+
+    socket.setTimeout(timeoutMs);
+
+    socket.on('connect', () => {
+      socket.write(`${command}\r`);
+      setTimeout(() => finish(null, { ok: true }), 180);
+    });
+
+    socket.on('timeout', () => finish(null, { ok: true }));
+    socket.on('error', finish);
+  });
+}
+
+async function setReceiverVolume(value) {
+  const target = normaliseVolume(value);
+
+  await avrSet(marantzVolumeCommand(target));
+
+  const deadline = Date.now() + 1600;
+
+  while (Date.now() < deadline) {
+    try {
+      const response = await avr('MV?', 'MV', 700);
+      const actual = parseReceiverVolume(response);
+
+      if (
+        actual !== null &&
+        Math.abs(actual - target) < 0.25
+      ) {
+        return actual;
+      }
+    } catch {
+      // Retry briefly while the receiver applies the command.
+    }
+
+    await sleep(80);
+  }
+
+  throw new Error(`Receiver did not reach ${target} dB`);
+}
+
+async function semanticVolumeControl(action, value = null) {
+  if (action === 'set') {
+    const volume = await setReceiverVolume(value);
+    return { ok: true, volume };
+  }
+
+  if (action !== 'up' && action !== 'down') {
+    throw new Error('Unknown volume action');
+  }
+
+  const response = await avr('MV?', 'MV', 700);
+  const current = parseReceiverVolume(response);
+
+  if (current === null) {
+    throw new Error('Could not read receiver volume');
+  }
+
+  const step = action === 'up' ? 0.5 : -0.5;
+  const volume = await setReceiverVolume(current + step);
+
+  return {
+    ok: true,
+    volume
+  };
+}
+
+async function semanticSourceControl(source) {
+  const commands = {
+    phono: 'MSSMART1',
+    cd: 'MSSMART2',
+    heos: 'MSSMART3',
+    tidal: 'MSSMART3',
+    tv: 'MSSMART4',
+    aux: 'SIAUX1'
+  };
+
+  const command = commands[source];
+
+  if (!command) {
+    throw new Error('Unknown source');
+  }
+
+  await avrSet(command);
+
+  return {
+    ok: true,
+    source
+  };
+}
+
+async function semanticPowerControl(state) {
+  const commands = {
+    on: 'ZMON',
+    standby: 'ZMOFF'
+  };
+
+  const command = commands[state];
+
+  if (!command) {
+    throw new Error('Unknown power state');
+  }
+
+  await avrSet(command);
+
+  return {
+    ok: true,
+    state
+  };
+}
+
+async function semanticMuteControl(state) {
+  let targetState = state;
+
+  if (state === 'toggle') {
+    const response = await avr('MU?', 'MU');
+    targetState = response === 'MUON' ? 'off' : 'on';
+  }
+
+  if (targetState !== 'on' && targetState !== 'off') {
+    throw new Error('Unknown mute state');
+  }
+
+  const targetMuted = targetState === 'on';
+  await avrSet(targetMuted ? 'MUON' : 'MUOFF');
+
+  const deadline = Date.now() + 1600;
+
+  while (Date.now() < deadline) {
+    try {
+      const response = await avr('MU?', 'MU', 700);
+
+      if (
+        (targetMuted && response === 'MUON') ||
+        (!targetMuted && response === 'MUOFF')
+      ) {
+        return {
+          ok: true,
+          muted: targetMuted
+        };
+      }
+    } catch {
+      // Retry briefly while the receiver applies the command.
+    }
+
+    await sleep(80);
+  }
+
+  throw new Error(
+    `Receiver did not confirm mute ${targetMuted ? 'on' : 'off'}`
+  );
+}
+
+async function semanticTransportControl(action) {
+  const pid = encodeURIComponent(PLAYER_ID);
+
+  async function getPlayState() {
+    const response = await heosBrowse(
+      `heos://player/get_play_state?pid=${pid}`
+    );
+
+    const message = String(response?.heos?.message || '');
+    const match = message.match(/(?:^|&)state=([^&]+)/);
+
+    return match ? decodeURIComponent(match[1]) : '';
+  }
+
+  async function getCurrentQid() {
+    const response = await heosBrowse(
+      `heos://player/get_now_playing_media?pid=${pid}`
+    );
+
+    const qid = response?.payload?.qid;
+    return qid === undefined || qid === null ? null : Number(qid);
+  }
+
+  if (action === 'play' || action === 'pause') {
+    const targetState = action;
+
+    await heosBrowse(
+      `heos://player/set_play_state?pid=${pid}&state=${targetState}`
+    );
+
+    const deadline = Date.now() + 1600;
+
+    while (Date.now() < deadline) {
+      try {
+        const state = await getPlayState();
+
+        if (state === targetState) {
+          return {
+            ok: true,
+            action,
+            state
+          };
+        }
+      } catch {
+        // Retry briefly while HEOS applies the command.
+      }
+
+      await sleep(80);
+    }
+
+    throw new Error(`HEOS did not confirm ${targetState}`);
+  }
+
+  if (action === 'next') {
+    const beforeQid = await getCurrentQid();
+
+    await heosBrowse(
+      `heos://player/play_next?pid=${pid}`
+    );
+
+    const deadline = Date.now() + 2000;
+
+    while (Date.now() < deadline) {
+      try {
+        const afterQid = await getCurrentQid();
+
+        if (
+          afterQid !== null &&
+          (beforeQid === null || afterQid !== beforeQid)
+        ) {
+          return {
+            ok: true,
+            action,
+            qid: afterQid
+          };
+        }
+      } catch {
+        // Retry briefly while HEOS changes queue position.
+      }
+
+      await sleep(100);
+    }
+
+    throw new Error('HEOS did not confirm next');
+  }
+
+  if (action === 'previous') {
+    const response = await heosBrowse(
+      `heos://player/play_previous?pid=${pid}`
+    );
+
+    if (response?.heos?.result === 'fail') {
+      throw new Error(
+        response?.heos?.message || 'HEOS previous failed'
+      );
+    }
+
+    return {
+      ok: true,
+      action
+    };
+  }
+
+  throw new Error('Unknown transport action');
+}
+
 function sendJson(res, statusCode, value) {
   res.writeHead(statusCode);
   res.end(JSON.stringify(value));
@@ -351,6 +669,52 @@ const server = http.createServer(async (req, res) => {
         selectedMid: selectedMid || null,
         shuffle
       });
+    } catch (error) {
+      return sendJson(res, 500, { error: error.message });
+    }
+  }
+
+  if (req.method === 'POST' && req.url.startsWith('/api/control/')) {
+    try {
+      const url = new URL(req.url, 'http://localhost');
+
+      if (url.pathname === '/api/control/power') {
+        const state = url.searchParams.get('state') || '';
+        return sendJson(res, 200, await semanticPowerControl(state));
+      }
+
+      if (url.pathname === '/api/control/source') {
+        const source = url.searchParams.get('source') || '';
+        return sendJson(res, 200, await semanticSourceControl(source));
+      }
+
+      if (url.pathname === '/api/control/volume') {
+        const action = url.searchParams.get('action') || '';
+        const value = url.searchParams.get('value');
+
+        return sendJson(
+          res,
+          200,
+          await semanticVolumeControl(action, value)
+        );
+      }
+
+      if (url.pathname === '/api/control/mute') {
+        const state = url.searchParams.get('state') || '';
+        return sendJson(res, 200, await semanticMuteControl(state));
+      }
+
+      if (url.pathname === '/api/control/transport') {
+        const action = url.searchParams.get('action') || '';
+
+        return sendJson(
+          res,
+          200,
+          await semanticTransportControl(action)
+        );
+      }
+
+      return sendJson(res, 404, { error: 'Unknown control endpoint' });
     } catch (error) {
       return sendJson(res, 500, { error: error.message });
     }
