@@ -442,34 +442,52 @@ async function semanticCommandControl(command) {
   const text = String(command || '')
     .trim()
     .toLowerCase()
+    .replace(/[.,!?;:]+/g, '')
     .replace(/\s+/g, ' ');
 
   if (!text) {
     throw new Error('Missing command');
   }
 
-  if (
-    text === 'power on' ||
-    text === 'turn on' ||
-    text === 'turn the marantz on'
-  ) {
+  const powerOnPhrases = new Set([
+    'power on',
+    'turn on',
+    'turn it on',
+    'turn the marantz on',
+    'marantz on'
+  ]);
+
+  const powerOffPhrases = new Set([
+    'power off',
+    'turn off',
+    'turn it off',
+    'standby',
+    'go to standby',
+    'turn the marantz off',
+    'marantz off'
+  ]);
+
+  if (powerOnPhrases.has(text)) {
     return semanticPowerControl('on');
   }
 
-  if (
-    text === 'power off' ||
-    text === 'turn off' ||
-    text === 'standby' ||
-    text === 'turn the marantz off'
-  ) {
+  if (powerOffPhrases.has(text)) {
     return semanticPowerControl('standby');
   }
 
-  if (text === 'mute') {
+  if (
+    text === 'mute' ||
+    text === 'mute it' ||
+    text === 'mute the marantz'
+  ) {
     return semanticMuteControl('on');
   }
 
-  if (text === 'unmute') {
+  if (
+    text === 'unmute' ||
+    text === 'unmute it' ||
+    text === 'unmute the marantz'
+  ) {
     return semanticMuteControl('off');
   }
 
@@ -477,22 +495,38 @@ async function semanticCommandControl(command) {
     return semanticMuteControl('toggle');
   }
 
-  if (
-    text === 'volume up' ||
-    text === 'turn it up'
-  ) {
+  const volumeUpPhrases = new Set([
+    'volume up',
+    'turn it up',
+    'turn volume up',
+    'turn the volume up',
+    'raise volume',
+    'raise the volume',
+    'increase volume',
+    'increase the volume'
+  ]);
+
+  const volumeDownPhrases = new Set([
+    'volume down',
+    'turn it down',
+    'turn volume down',
+    'turn the volume down',
+    'lower volume',
+    'lower the volume',
+    'decrease volume',
+    'decrease the volume'
+  ]);
+
+  if (volumeUpPhrases.has(text)) {
     return semanticVolumeControl('up');
   }
 
-  if (
-    text === 'volume down' ||
-    text === 'turn it down'
-  ) {
+  if (volumeDownPhrases.has(text)) {
     return semanticVolumeControl('down');
   }
 
   const volumeMatch = text.match(
-    /^(?:set )?volume(?: to)? (-?\d+(?:\.5)?)$/
+    /^(?:set )?(?:the )?volume(?: to)? (-?\d+(?:\.5)?)$/
   );
 
   if (volumeMatch) {
@@ -500,20 +534,30 @@ async function semanticCommandControl(command) {
   }
 
   const sourceMatch = text.match(
-    /^(?:switch to |select |source )?(phono|cd|heos|tidal|tv|aux)$/
+    /^(?:(?:switch|change) to |select |(?:set )?(?:the )?source to |source )?(phono|cd|heos|tidal|tv|aux)$/
   );
 
   if (sourceMatch) {
     return semanticSourceControl(sourceMatch[1]);
   }
 
-  if (
-    text === 'play' ||
-    text === 'pause' ||
-    text === 'next' ||
-    text === 'previous'
-  ) {
-    return semanticTransportControl(text);
+  const transportPhrases = {
+    play: 'play',
+    'play music': 'play',
+    resume: 'play',
+    'resume music': 'play',
+    pause: 'pause',
+    'pause music': 'pause',
+    next: 'next',
+    'next track': 'next',
+    'skip track': 'next',
+    'skip this track': 'next',
+    previous: 'previous',
+    'previous track': 'previous'
+  };
+
+  if (transportPhrases[text]) {
+    return semanticTransportControl(transportPhrases[text]);
   }
 
   throw new Error('Unknown command');
