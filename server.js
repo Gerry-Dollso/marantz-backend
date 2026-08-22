@@ -538,11 +538,18 @@ async function semanticCommandControl(command) {
   }
 
   const sourceMatch = text.match(
-    /^(?:(?:switch|change) to |select |(?:set )?(?:the )?source to |source )?(phono|cd|heos|tidal|tv|aux)$/
+    /^(?:(?:switch|change) to |select |(?:set )?(?:the )?source to |source )?(phono|funnel|fono|phone oh|cd|heos|tidal|tv|aux)$/
   );
 
   if (sourceMatch) {
-    return semanticSourceControl(sourceMatch[1]);
+    const sourceAliases = {
+      funnel: 'phono',
+      fono: 'phono',
+      'phone oh': 'phono'
+    };
+
+    const source = sourceAliases[sourceMatch[1]] || sourceMatch[1];
+    return semanticSourceControl(source);
   }
 
   const transportPhrases = {
