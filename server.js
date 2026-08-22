@@ -438,6 +438,87 @@ async function semanticTransportControl(action) {
   throw new Error('Unknown transport action');
 }
 
+async function semanticCommandControl(command) {
+  const text = String(command || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+
+  if (!text) {
+    throw new Error('Missing command');
+  }
+
+  if (
+    text === 'power on' ||
+    text === 'turn on' ||
+    text === 'turn the marantz on'
+  ) {
+    return semanticPowerControl('on');
+  }
+
+  if (
+    text === 'power off' ||
+    text === 'turn off' ||
+    text === 'standby' ||
+    text === 'turn the marantz off'
+  ) {
+    return semanticPowerControl('standby');
+  }
+
+  if (text === 'mute') {
+    return semanticMuteControl('on');
+  }
+
+  if (text === 'unmute') {
+    return semanticMuteControl('off');
+  }
+
+  if (text === 'toggle mute') {
+    return semanticMuteControl('toggle');
+  }
+
+  if (
+    text === 'volume up' ||
+    text === 'turn it up'
+  ) {
+    return semanticVolumeControl('up');
+  }
+
+  if (
+    text === 'volume down' ||
+    text === 'turn it down'
+  ) {
+    return semanticVolumeControl('down');
+  }
+
+  const volumeMatch = text.match(
+    /^(?:set )?volume(?: to)? (-?\d+(?:\.5)?)$/
+  );
+
+  if (volumeMatch) {
+    return semanticVolumeControl('set', volumeMatch[1]);
+  }
+
+  const sourceMatch = text.match(
+    /^(?:switch to |select |source )?(phono|cd|heos|tidal|tv|aux)$/
+  );
+
+  if (sourceMatch) {
+    return semanticSourceControl(sourceMatch[1]);
+  }
+
+  if (
+    text === 'play' ||
+    text === 'pause' ||
+    text === 'next' ||
+    text === 'previous'
+  ) {
+    return semanticTransportControl(text);
+  }
+
+  throw new Error('Unknown command');
+}
+
 function sendJson(res, statusCode, value) {
   res.writeHead(statusCode);
   res.end(JSON.stringify(value));
@@ -669,6 +750,21 @@ const server = http.createServer(async (req, res) => {
         selectedMid: selectedMid || null,
         shuffle
       });
+    } catch (error) {
+      return sendJson(res, 500, { error: error.message });
+    }
+  }
+
+  if (req.method === 'POST' && req.url.startsWith('/api/command')) {
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      const command = url.searchParams.get('command') || '';
+
+      return sendJson(
+        res,
+        200,
+        await semanticCommandControl(command)
+      );
     } catch (error) {
       return sendJson(res, 500, { error: error.message });
     }
