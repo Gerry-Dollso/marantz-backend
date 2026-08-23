@@ -264,6 +264,17 @@ async function semanticSourceControl(source) {
 
   await avrSet(command);
 
+  if (source === 'aux') {
+    await sleep(300);
+    await avrSet('SPPR 1');
+
+    const preset = await avr('SPPR?', 'SPPR');
+
+    if (preset !== 'SPPR 1') {
+      throw new Error('Receiver did not confirm Speaker Preset 1');
+    }
+  }
+
   return {
     ok: true,
     source
