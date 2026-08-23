@@ -2,6 +2,7 @@
 
 const http = require('http');
 const net = require('net');
+const { createTidalVoiceControl } = require('./tidal-voice');
 
 const AVR_HOST = '192.168.50.220';
 const AVR_PORT = 23;
@@ -449,6 +450,12 @@ async function semanticTransportControl(action) {
   throw new Error('Unknown transport action');
 }
 
+const playTidalAlbumByArtist = createTidalVoiceControl({
+  heosBrowse,
+  playerId: PLAYER_ID,
+  selectTidalSource: () => semanticSourceControl('tidal')
+});
+
 async function semanticCommandControl(command) {
   const text = String(command || '')
     .trim()
@@ -561,6 +568,17 @@ async function semanticCommandControl(command) {
 
     const source = sourceAliases[sourceMatch[1]] || sourceMatch[1];
     return semanticSourceControl(source);
+  }
+
+  const tidalAlbumMatch = text.match(
+    /^play (?:the )?(?:album )?(.+?) by (.+)$/
+  );
+
+  if (tidalAlbumMatch) {
+    return playTidalAlbumByArtist(
+      tidalAlbumMatch[1],
+      tidalAlbumMatch[2]
+    );
   }
 
   const transportPhrases = {
