@@ -161,13 +161,26 @@ function chooseBestMatch(items, requested, getName, minimumScore = 0.52) {
 function createTidalVoiceControl({ heosBrowse, playerId, selectTidalSource }) {
   async function searchArtists(query) {
     const response = await heosBrowse(
-      'heos://browse/search?sid=10&scid=1&search=' +
-      encodeURIComponent(query)
+      'heos://browse/search?sid=10&scid=1&search=' + encodeURIComponent(query)
     );
 
     return (response.payload || [])
       .filter(item => item.cid)
       .map(item => ({ name: item.name || '', cid: String(item.cid) }));
+  }
+
+  async function resolveArtist(requestedArtist) {
+    const correctedArtist = correctArtistName(requestedArtist);
+    const artists = await searchArtists(correctedArtist);
+    const exactArtist = artists.find(
+      item => normaliseMatchText(item.name) === normaliseMatchText(correctedArtist)
+    );
+
+    if (!exactArtist) {
+      throw new Error(`TIDAL artist not found safely: ${requestedArtist}`);
+    }
+
+    return { exactArtist, correctedArtist };
   }
 
   async function getArtistAlbums(artistCid) {
@@ -181,6 +194,24 @@ function createTidalVoiceControl({ heosBrowse, playerId, selectTidalSource }) {
       name: item.name || '',
       artist: item.artist || '',
       cid: item.cid || '',
+      playable: item.playable === 'yes'
+    }));
+  }
+
+  async function getArtistTracks(artistCid) {
+    const artistId = String(artistCid || '').trim().replace('LIBARTIST-', '');
+    const response = await heosBrowse(
+      'heos://browse/browse?sid=10&cid=' +
+      encodeURIComponent(`LIBARTIST-Tracks-${artistId}`),
+      8000
+    );
+
+    return (response.payload || []).map(item => ({
+      name: item.name || '',
+      artist: item.artist || '',
+      album: item.album || '',
+      albumId: item.album_id || '',
+      mid: item.mid || '',
       playable: item.playable === 'yes'
     }));
   }
@@ -213,57 +244,85 @@ function createTidalVoiceControl({ heosBrowse, playerId, selectTidalSource }) {
     return tracks.length;
   }
 
-  return async function playAlbumByArtist(albumName, artistName) {
-    const requestedAlbum = String(albumName || '').trim();
-    const requestedArtist = String(artistName || '').trim();
-    const correctedArtist = correctArtistName(requestedArtist);
-
-    if (!requestedAlbum || !requestedArtist) {
-      throw new Error('Missing album or artist');
-    }
-
-    const artists = await searchArtists(correctedArtist);
-    const exactArtist = artists.find(
-      item => normaliseMatchText(item.name) === normaliseMatchText(correctedArtist)
+  async function playSingleTrack(trackContainerCid, trackMid) {
+    await heosBrowse(
+      'heos://browse/add_to_queue?pid=' + encodeURIComponent(playerId) +
+      '&sid=10&cid=' + encodeURIComponent(trackContainerCid) +
+      '&mid=' + encodeURIComponent(trackMid) + '&aid=4'
     );
+  }
 
-    if (!exactArtist) {
-      throw new Error(`TIDAL artist not found safely: ${requestedArtist}`);
+  return async function playByArtist(title, artistName) {
+    const requestedTitle = String(title || '').trim();
+    const requestedArtist = String(artistName || '').trim();
+
+    if (!requestedTitle || !requestedArtist) {
+      throw new Error('Missing title or artist');
     }
+
+    const { exactArtist, correctedArtist } = await resolveArtist(requestedArtist);
 
     const albums = await getArtistAlbums(exactArtist.cid);
     const playableAlbums = albums.filter(item => item.playable && item.cid);
     const albumMatch = chooseBestMatch(
       playableAlbums,
-      requestedAlbum,
+      requestedTitle,
       item => item.name,
-      0.56
+      0.76
     );
 
-    if (!albumMatch) {
+    if (albumMatch) {
+      if (typeof selectTidalSource === 'function') await selectTidalSource();
+      const queued = await queueAlbum(albumMatch.item.cid);
+
+      return {
+        ok: true,
+        action: 'play-album',
+        artist: exactArtist.name,
+        album: albumMatch.item.name,
+        albumCid: albumMatch.item.cid,
+        queued,
+        match: {
+          requestedArtist,
+          correctedArtist,
+          requestedTitle,
+          titleScore: Number(albumMatch.score.toFixed(3))
+        }
+      };
+    }
+
+    const artistId = String(exactArtist.cid).replace('LIBARTIST-', '');
+    const trackContainerCid = `LIBARTIST-Tracks-${artistId}`;
+    const tracks = await getArtistTracks(exactArtist.cid);
+    const playableTracks = tracks.filter(item => item.playable && item.mid);
+    const trackMatch = chooseBestMatch(
+      playableTracks,
+      requestedTitle,
+      item => item.name,
+      0.64
+    );
+
+    if (!trackMatch) {
       throw new Error(
-        `TIDAL album not found safely: ${requestedAlbum} by ${exactArtist.name}`
+        `TIDAL title not found safely: ${requestedTitle} by ${exactArtist.name}`
       );
     }
 
-    if (typeof selectTidalSource === 'function') {
-      await selectTidalSource();
-    }
-
-    const queued = await queueAlbum(albumMatch.item.cid);
+    if (typeof selectTidalSource === 'function') await selectTidalSource();
+    await playSingleTrack(trackContainerCid, trackMatch.item.mid);
 
     return {
       ok: true,
-      action: 'play-album',
+      action: 'play-track',
       artist: exactArtist.name,
-      album: albumMatch.item.name,
-      albumCid: albumMatch.item.cid,
-      queued,
+      track: trackMatch.item.name,
+      album: trackMatch.item.album || '',
+      mid: String(trackMatch.item.mid),
       match: {
         requestedArtist,
         correctedArtist,
-        requestedAlbum,
-        albumScore: Number(albumMatch.score.toFixed(3))
+        requestedTitle,
+        titleScore: Number(trackMatch.score.toFixed(3))
       }
     };
   };
