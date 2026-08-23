@@ -20,7 +20,8 @@ function simplifyMatchText(value) {
 
 const ARTIST_CORRECTIONS = new Map([
   ['a mass of attack', 'Massive Attack'],
-  ['mass of attack', 'Massive Attack']
+  ['mass of attack', 'Massive Attack'],
+  ['moss of attack', 'Massive Attack']
 ]);
 
 function correctArtistName(value) {
