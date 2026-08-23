@@ -585,7 +585,7 @@ async function semanticCommandControl(command) {
       );
     } catch (error) {
       const safeFailure =
-        /^TIDAL (?:artist|album|track) not found safely:/.test(
+        /^TIDAL (?:artist|album|track|title) not found safely:/.test(
           String(error.message || '')
         );
 
