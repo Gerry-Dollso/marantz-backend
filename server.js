@@ -571,7 +571,7 @@ async function semanticCommandControl(command) {
   }
 
   const tidalAlbumMatch = text.match(
-    /^play (?:the )?(?:album )?(.+?) by (.+)$/
+    /^(?:play|played) (?:the )?(?:album )?(.+?) by (.+)$/
   );
 
   if (tidalAlbumMatch) {
