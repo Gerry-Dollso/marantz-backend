@@ -3,6 +3,9 @@
 const http = require('http');
 const net = require('net');
 const { createTidalVoiceControl } = require('./tidal-voice');
+const {
+  createTidalArtistVoiceControl
+} = require('./tidal-artist-voice');
 
 const AVR_HOST = '192.168.50.220';
 const AVR_PORT = 23;
@@ -459,6 +462,12 @@ const playTidalAlbumByArtist = createTidalVoiceControl({
   selectTidalSource: () => semanticSourceControl('tidal')
 });
 
+const playTidalArtist = createTidalArtistVoiceControl({
+  heosBrowse,
+  playerId: PLAYER_ID,
+  selectTidalSource: () => semanticSourceControl('tidal')
+});
+
 async function semanticCommandControl(command) {
   const text = String(command || '')
     .trim()
@@ -598,6 +607,38 @@ async function semanticCommandControl(command) {
         query: tidalAlbumMatch[2].trim(),
         heard: text,
         requestedTitle: tidalAlbumMatch[1].trim(),
+        reason: error.message,
+        createdAt: Date.now()
+      };
+
+      return {
+        ok: false,
+        action: 'search-required',
+        ...pendingTidalVoiceSearch
+      };
+    }
+  }
+
+  const tidalArtistMatch = text.match(/^play (.+)$/);
+
+  if (tidalArtistMatch) {
+    try {
+      return await playTidalArtist(tidalArtistMatch[1]);
+    } catch (error) {
+      const safeFailure =
+        /^TIDAL artist not found safely:/.test(
+          String(error.message || '')
+        );
+
+      if (!safeFailure) {
+        throw error;
+      }
+
+      pendingTidalVoiceSearch = {
+        id: ++tidalVoiceSearchSequence,
+        query: tidalArtistMatch[1].trim(),
+        heard: text,
+        requestedTitle: '',
         reason: error.message,
         createdAt: Date.now()
       };
