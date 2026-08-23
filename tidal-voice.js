@@ -92,7 +92,10 @@ function matchScore(candidate, requested) {
     return 0.94;
   }
 
-  if (name.includes(target) || target.includes(name)) {
+  if (
+    Math.min(simpleName.length, simpleTarget.length) >= 4 &&
+    (simpleName.includes(simpleTarget) || simpleTarget.includes(simpleName))
+  ) {
     return 0.9;
   }
 
