@@ -18,6 +18,16 @@ function simplifyMatchText(value) {
     .join(' ');
 }
 
+const ARTIST_CORRECTIONS = new Map([
+  ['a mass of attack', 'Massive Attack'],
+  ['mass of attack', 'Massive Attack']
+]);
+
+function correctArtistName(value) {
+  const normalised = normaliseMatchText(value);
+  return ARTIST_CORRECTIONS.get(normalised) || String(value || '').trim();
+}
+
 function phoneticKey(value) {
   return simplifyMatchText(value)
     .replace(/ph/g, 'f')
@@ -71,10 +81,7 @@ function tokenSimilarity(left, right) {
     const shorter = Math.min(x.length, y.length);
     const longer = Math.max(x.length, y.length);
 
-    if (
-      shorter >= 4 &&
-      (x.startsWith(y) || y.startsWith(x))
-    ) {
+    if (shorter >= 4 && (x.startsWith(y) || y.startsWith(x))) {
       return 0.7 + 0.25 * (shorter / longer);
     }
 
@@ -88,11 +95,9 @@ function tokenSimilarity(left, right) {
 
   for (const requestedToken of b) {
     let best = 0;
-
     for (const candidateToken of a) {
       best = Math.max(best, tokenScore(candidateToken, requestedToken));
     }
-
     total += best;
   }
 
@@ -111,10 +116,7 @@ function matchScore(candidate, requested) {
 
   if (simpleName === simpleTarget) return 0.98;
 
-  if (
-    name.startsWith(`${target} (`) ||
-    name.startsWith(`${target} -`)
-  ) {
+  if (name.startsWith(`${target} (`) || name.startsWith(`${target} -`)) {
     return 0.94;
   }
 
@@ -131,10 +133,7 @@ function matchScore(candidate, requested) {
 
   const spelling = editSimilarity(simpleName, simpleTarget);
   const tokens = tokenSimilarity(simpleName, simpleTarget);
-  const phonetic = editSimilarity(
-    phoneticKey(simpleName),
-    phoneticKey(simpleTarget)
-  );
+  const phonetic = editSimilarity(phoneticKey(simpleName), phoneticKey(simpleTarget));
 
   const base = Math.max(
     spelling,
@@ -148,55 +147,30 @@ function matchScore(candidate, requested) {
 
 function rankMatches(items, requested, getName) {
   return items
-    .map(item => ({
-      item,
-      score: matchScore(getName(item), requested)
-    }))
+    .map(item => ({ item, score: matchScore(getName(item), requested) }))
     .sort((left, right) => right.score - left.score);
 }
 
 function chooseBestMatch(items, requested, getName, minimumScore = 0.52) {
   const ranked = rankMatches(items, requested, getName);
   const best = ranked[0];
-
   return best && best.score >= minimumScore ? best : null;
 }
 
 function createTidalVoiceControl({ heosBrowse, playerId, selectTidalSource }) {
   async function searchArtists(query) {
-    const queries = [
-      normaliseMatchText(query),
-      simplifyMatchText(query)
-    ].filter((value, index, all) => value && all.indexOf(value) === index);
+    const response = await heosBrowse(
+      'heos://browse/search?sid=10&scid=1&search=' +
+      encodeURIComponent(query)
+    );
 
-    const artists = [];
-    const seen = new Set();
-
-    for (const searchQuery of queries) {
-      const response = await heosBrowse(
-        'heos://browse/search?sid=10&scid=1&search=' +
-        encodeURIComponent(searchQuery)
-      );
-
-      for (const item of response.payload || []) {
-        const cid = String(item.cid || '');
-        if (!cid || seen.has(cid)) continue;
-        seen.add(cid);
-        artists.push({
-          name: item.name || '',
-          cid
-        });
-      }
-    }
-
-    return artists;
+    return (response.payload || [])
+      .filter(item => item.cid)
+      .map(item => ({ name: item.name || '', cid: String(item.cid) }));
   }
 
   async function getArtistAlbums(artistCid) {
-    const artistId = String(artistCid || '')
-      .trim()
-      .replace('LIBARTIST-', '');
-
+    const artistId = String(artistCid || '').trim().replace('LIBARTIST-', '');
     const response = await heosBrowse(
       'heos://browse/browse?sid=10&cid=' +
       encodeURIComponent(`LIBARTIST-Albums-${artistId}`)
@@ -219,9 +193,7 @@ function createTidalVoiceControl({ heosBrowse, playerId, selectTidalSource }) {
       item => item.playable === 'yes' && item.mid
     );
 
-    if (!tracks.length) {
-      throw new Error('Album has no playable tracks');
-    }
+    if (!tracks.length) throw new Error('Album has no playable tracks');
 
     await heosBrowse(
       'heos://browse/add_to_queue?pid=' + encodeURIComponent(playerId) +
@@ -243,76 +215,54 @@ function createTidalVoiceControl({ heosBrowse, playerId, selectTidalSource }) {
   return async function playAlbumByArtist(albumName, artistName) {
     const requestedAlbum = String(albumName || '').trim();
     const requestedArtist = String(artistName || '').trim();
+    const correctedArtist = correctArtistName(requestedArtist);
 
     if (!requestedAlbum || !requestedArtist) {
       throw new Error('Missing album or artist');
     }
 
-    const artists = await searchArtists(requestedArtist);
-    const rankedArtists = rankMatches(
-      artists,
-      requestedArtist,
-      item => item.name
-    ).filter(match => match.score >= 0.28).slice(0, 10);
+    const artists = await searchArtists(correctedArtist);
+    const exactArtist = artists.find(
+      item => normaliseMatchText(item.name) === normaliseMatchText(correctedArtist)
+    );
 
-    if (!rankedArtists.length) {
-      throw new Error(`TIDAL artist not found: ${requestedArtist}`);
+    if (!exactArtist) {
+      throw new Error(`TIDAL artist not found safely: ${requestedArtist}`);
     }
 
-    let bestPair = null;
+    const albums = await getArtistAlbums(exactArtist.cid);
+    const playableAlbums = albums.filter(item => item.playable && item.cid);
+    const albumMatch = chooseBestMatch(
+      playableAlbums,
+      requestedAlbum,
+      item => item.name,
+      0.56
+    );
 
-    for (const artistMatch of rankedArtists) {
-      const albums = await getArtistAlbums(artistMatch.item.cid);
-      const playableAlbums = albums.filter(item => item.playable && item.cid);
-      const albumMatch = chooseBestMatch(
-        playableAlbums,
-        requestedAlbum,
-        item => item.name,
-        0.4
-      );
-
-      if (!albumMatch) continue;
-
-      const combinedScore =
-        artistMatch.score * 0.48 + albumMatch.score * 0.52;
-
-      if (!bestPair || combinedScore > bestPair.combinedScore) {
-        bestPair = {
-          artistMatch,
-          albumMatch,
-          combinedScore
-        };
-      }
-    }
-
-    if (!bestPair || bestPair.combinedScore < 0.5) {
+    if (!albumMatch) {
       throw new Error(
-        `TIDAL album not found: ${requestedAlbum} by ${requestedArtist}`
+        `TIDAL album not found safely: ${requestedAlbum} by ${exactArtist.name}`
       );
     }
-
-    const artist = bestPair.artistMatch.item;
-    const album = bestPair.albumMatch.item;
 
     if (typeof selectTidalSource === 'function') {
       await selectTidalSource();
     }
 
-    const queued = await queueAlbum(album.cid);
+    const queued = await queueAlbum(albumMatch.item.cid);
 
     return {
       ok: true,
       action: 'play-album',
-      artist: artist.name,
-      album: album.name,
-      albumCid: album.cid,
+      artist: exactArtist.name,
+      album: albumMatch.item.name,
+      albumCid: albumMatch.item.cid,
       queued,
       match: {
         requestedArtist,
-        artistScore: Number(bestPair.artistMatch.score.toFixed(3)),
+        correctedArtist,
         requestedAlbum,
-        albumScore: Number(bestPair.albumMatch.score.toFixed(3)),
-        combinedScore: Number(bestPair.combinedScore.toFixed(3))
+        albumScore: Number(albumMatch.score.toFixed(3))
       }
     };
   };
