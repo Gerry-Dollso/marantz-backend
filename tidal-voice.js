@@ -60,17 +60,43 @@ function editSimilarity(left, right) {
 }
 
 function tokenSimilarity(left, right) {
-  const a = new Set(simplifyMatchText(left).split(' ').filter(Boolean));
-  const b = new Set(simplifyMatchText(right).split(' ').filter(Boolean));
+  const a = simplifyMatchText(left).split(' ').filter(Boolean);
+  const b = simplifyMatchText(right).split(' ').filter(Boolean);
 
-  if (!a.size || !b.size) return 0;
+  if (!a.length || !b.length) return 0;
 
-  let overlap = 0;
-  for (const token of a) {
-    if (b.has(token)) overlap += 1;
+  function tokenScore(x, y) {
+    if (x === y) return 1;
+
+    const shorter = Math.min(x.length, y.length);
+    const longer = Math.max(x.length, y.length);
+
+    if (
+      shorter >= 4 &&
+      (x.startsWith(y) || y.startsWith(x))
+    ) {
+      return 0.7 + 0.25 * (shorter / longer);
+    }
+
+    return Math.max(
+      editSimilarity(x, y),
+      editSimilarity(phoneticKey(x), phoneticKey(y)) * 0.9
+    );
   }
 
-  return overlap / Math.max(a.size, b.size);
+  let total = 0;
+
+  for (const requestedToken of b) {
+    let best = 0;
+
+    for (const candidateToken of a) {
+      best = Math.max(best, tokenScore(candidateToken, requestedToken));
+    }
+
+    total += best;
+  }
+
+  return total / b.length;
 }
 
 function matchScore(candidate, requested) {
@@ -112,30 +138,28 @@ function matchScore(candidate, requested) {
 
   const base = Math.max(
     spelling,
-    tokens * 0.92,
+    tokens * 0.96,
     phonetic * 0.88,
-    spelling * 0.65 + phonetic * 0.35
+    spelling * 0.55 + tokens * 0.3 + phonetic * 0.15
   );
 
   return lengthRatio < 0.5 ? base * 0.72 : base;
 }
 
+function rankMatches(items, requested, getName) {
+  return items
+    .map(item => ({
+      item,
+      score: matchScore(getName(item), requested)
+    }))
+    .sort((left, right) => right.score - left.score);
+}
+
 function chooseBestMatch(items, requested, getName, minimumScore = 0.52) {
-  let best = null;
-  let bestScore = -1;
+  const ranked = rankMatches(items, requested, getName);
+  const best = ranked[0];
 
-  for (const item of items) {
-    const score = matchScore(getName(item), requested);
-
-    if (score > bestScore) {
-      best = item;
-      bestScore = score;
-    }
-  }
-
-  return bestScore >= minimumScore
-    ? { item: best, score: bestScore }
-    : null;
+  return best && best.score >= minimumScore ? best : null;
 }
 
 function createTidalVoiceControl({ heosBrowse, playerId, selectTidalSource }) {
@@ -225,32 +249,50 @@ function createTidalVoiceControl({ heosBrowse, playerId, selectTidalSource }) {
     }
 
     const artists = await searchArtists(requestedArtist);
-    const artistMatch = chooseBestMatch(
+    const rankedArtists = rankMatches(
       artists,
       requestedArtist,
-      item => item.name,
-      0.5
-    );
+      item => item.name
+    ).filter(match => match.score >= 0.28).slice(0, 10);
 
-    if (!artistMatch?.item?.cid) {
+    if (!rankedArtists.length) {
       throw new Error(`TIDAL artist not found: ${requestedArtist}`);
     }
 
-    const artist = artistMatch.item;
-    const albums = await getArtistAlbums(artist.cid);
-    const playableAlbums = albums.filter(item => item.playable && item.cid);
-    const albumMatch = chooseBestMatch(
-      playableAlbums,
-      requestedAlbum,
-      item => item.name,
-      0.48
-    );
+    let bestPair = null;
 
-    if (!albumMatch?.item?.cid) {
-      throw new Error(`TIDAL album not found: ${requestedAlbum} by ${artist.name}`);
+    for (const artistMatch of rankedArtists) {
+      const albums = await getArtistAlbums(artistMatch.item.cid);
+      const playableAlbums = albums.filter(item => item.playable && item.cid);
+      const albumMatch = chooseBestMatch(
+        playableAlbums,
+        requestedAlbum,
+        item => item.name,
+        0.4
+      );
+
+      if (!albumMatch) continue;
+
+      const combinedScore =
+        artistMatch.score * 0.48 + albumMatch.score * 0.52;
+
+      if (!bestPair || combinedScore > bestPair.combinedScore) {
+        bestPair = {
+          artistMatch,
+          albumMatch,
+          combinedScore
+        };
+      }
     }
 
-    const album = albumMatch.item;
+    if (!bestPair || bestPair.combinedScore < 0.5) {
+      throw new Error(
+        `TIDAL album not found: ${requestedAlbum} by ${requestedArtist}`
+      );
+    }
+
+    const artist = bestPair.artistMatch.item;
+    const album = bestPair.albumMatch.item;
 
     if (typeof selectTidalSource === 'function') {
       await selectTidalSource();
@@ -267,9 +309,10 @@ function createTidalVoiceControl({ heosBrowse, playerId, selectTidalSource }) {
       queued,
       match: {
         requestedArtist,
-        artistScore: Number(artistMatch.score.toFixed(3)),
+        artistScore: Number(bestPair.artistMatch.score.toFixed(3)),
         requestedAlbum,
-        albumScore: Number(albumMatch.score.toFixed(3))
+        albumScore: Number(bestPair.albumMatch.score.toFixed(3)),
+        combinedScore: Number(bestPair.combinedScore.toFixed(3))
       }
     };
   };
