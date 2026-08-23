@@ -5,39 +5,158 @@ function normaliseMatchText(value) {
     .trim()
     .toLowerCase()
     .replace(/[’']/g, "'")
-    .replace(/\s+/g, ' ');
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9' ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-function chooseExactOrClosest(items, requested, getName) {
+function simplifyMatchText(value) {
+  return normaliseMatchText(value)
+    .split(' ')
+    .filter(word => !['a', 'an', 'the', 'of'].includes(word))
+    .join(' ');
+}
+
+function phoneticKey(value) {
+  return simplifyMatchText(value)
+    .replace(/ph/g, 'f')
+    .replace(/ng/g, 'n')
+    .replace(/[zxs]/g, 's')
+    .replace(/[ckq]/g, 'k')
+    .replace(/[v]/g, 'f')
+    .replace(/[dt]/g, 't')
+    .replace(/[gj]/g, 'j')
+    .replace(/[aeiouy ]/g, '')
+    .replace(/(.)\1+/g, '$1');
+}
+
+function editSimilarity(left, right) {
+  const a = String(left || '');
+  const b = String(right || '');
+
+  if (!a && !b) return 1;
+  if (!a || !b) return 0;
+
+  const previous = Array.from({ length: b.length + 1 }, (_, i) => i);
+
+  for (let i = 1; i <= a.length; i += 1) {
+    const current = [i];
+
+    for (let j = 1; j <= b.length; j += 1) {
+      current[j] = Math.min(
+        previous[j] + 1,
+        current[j - 1] + 1,
+        previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+
+    for (let j = 0; j < current.length; j += 1) {
+      previous[j] = current[j];
+    }
+  }
+
+  return 1 - previous[b.length] / Math.max(a.length, b.length);
+}
+
+function tokenSimilarity(left, right) {
+  const a = new Set(simplifyMatchText(left).split(' ').filter(Boolean));
+  const b = new Set(simplifyMatchText(right).split(' ').filter(Boolean));
+
+  if (!a.size || !b.size) return 0;
+
+  let overlap = 0;
+  for (const token of a) {
+    if (b.has(token)) overlap += 1;
+  }
+
+  return overlap / Math.max(a.size, b.size);
+}
+
+function matchScore(candidate, requested) {
+  const name = normaliseMatchText(candidate);
   const target = normaliseMatchText(requested);
 
-  const exact = items.find(
-    item => normaliseMatchText(getName(item)) === target
+  if (!name || !target) return 0;
+  if (name === target) return 1;
+
+  const simpleName = simplifyMatchText(name);
+  const simpleTarget = simplifyMatchText(target);
+
+  if (simpleName === simpleTarget) return 0.98;
+
+  if (
+    name.startsWith(`${target} (`) ||
+    name.startsWith(`${target} -`)
+  ) {
+    return 0.94;
+  }
+
+  if (name.includes(target) || target.includes(name)) {
+    return 0.9;
+  }
+
+  const spelling = editSimilarity(simpleName, simpleTarget);
+  const tokens = tokenSimilarity(simpleName, simpleTarget);
+  const phonetic = editSimilarity(
+    phoneticKey(simpleName),
+    phoneticKey(simpleTarget)
   );
-  if (exact) return exact;
 
-  const edition = items.find(item => {
-    const name = normaliseMatchText(getName(item));
-    return name.startsWith(`${target} (`) || name.startsWith(`${target} -`);
-  });
-  if (edition) return edition;
+  return Math.max(
+    spelling,
+    tokens * 0.92,
+    phonetic * 0.88,
+    spelling * 0.65 + phonetic * 0.35
+  );
+}
 
-  return items.find(
-    item => normaliseMatchText(getName(item)).includes(target)
-  ) || null;
+function chooseBestMatch(items, requested, getName, minimumScore = 0.52) {
+  let best = null;
+  let bestScore = -1;
+
+  for (const item of items) {
+    const score = matchScore(getName(item), requested);
+
+    if (score > bestScore) {
+      best = item;
+      bestScore = score;
+    }
+  }
+
+  return bestScore >= minimumScore
+    ? { item: best, score: bestScore }
+    : null;
 }
 
 function createTidalVoiceControl({ heosBrowse, playerId, selectTidalSource }) {
   async function searchArtists(query) {
-    const response = await heosBrowse(
-      'heos://browse/search?sid=10&scid=1&search=' +
-      encodeURIComponent(String(query || '').trim())
-    );
+    const queries = [
+      normaliseMatchText(query),
+      simplifyMatchText(query)
+    ].filter((value, index, all) => value && all.indexOf(value) === index);
 
-    return (response.payload || []).map(item => ({
-      name: item.name || '',
-      cid: item.cid || ''
-    }));
+    const artists = [];
+    const seen = new Set();
+
+    for (const searchQuery of queries) {
+      const response = await heosBrowse(
+        'heos://browse/search?sid=10&scid=1&search=' +
+        encodeURIComponent(searchQuery)
+      );
+
+      for (const item of response.payload || []) {
+        const cid = String(item.cid || '');
+        if (!cid || seen.has(cid)) continue;
+        seen.add(cid);
+        artists.push({
+          name: item.name || '',
+          cid
+        });
+      }
+    }
+
+    return artists;
   }
 
   async function getArtistAlbums(artistCid) {
@@ -97,19 +216,32 @@ function createTidalVoiceControl({ heosBrowse, playerId, selectTidalSource }) {
     }
 
     const artists = await searchArtists(requestedArtist);
-    const artist = chooseExactOrClosest(artists, requestedArtist, item => item.name);
+    const artistMatch = chooseBestMatch(
+      artists,
+      requestedArtist,
+      item => item.name,
+      0.5
+    );
 
-    if (!artist || !artist.cid) {
+    if (!artistMatch?.item?.cid) {
       throw new Error(`TIDAL artist not found: ${requestedArtist}`);
     }
 
+    const artist = artistMatch.item;
     const albums = await getArtistAlbums(artist.cid);
     const playableAlbums = albums.filter(item => item.playable && item.cid);
-    const album = chooseExactOrClosest(playableAlbums, requestedAlbum, item => item.name);
+    const albumMatch = chooseBestMatch(
+      playableAlbums,
+      requestedAlbum,
+      item => item.name,
+      0.48
+    );
 
-    if (!album || !album.cid) {
+    if (!albumMatch?.item?.cid) {
       throw new Error(`TIDAL album not found: ${requestedAlbum} by ${artist.name}`);
     }
+
+    const album = albumMatch.item;
 
     if (typeof selectTidalSource === 'function') {
       await selectTidalSource();
@@ -123,7 +255,13 @@ function createTidalVoiceControl({ heosBrowse, playerId, selectTidalSource }) {
       artist: artist.name,
       album: album.name,
       albumCid: album.cid,
-      queued
+      queued,
+      match: {
+        requestedArtist,
+        artistScore: Number(artistMatch.score.toFixed(3)),
+        requestedAlbum,
+        albumScore: Number(albumMatch.score.toFixed(3))
+      }
     };
   };
 }
