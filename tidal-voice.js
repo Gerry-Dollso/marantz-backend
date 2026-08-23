@@ -92,11 +92,15 @@ function matchScore(candidate, requested) {
     return 0.94;
   }
 
+  const shorter = Math.min(simpleName.length, simpleTarget.length);
+  const longer = Math.max(simpleName.length, simpleTarget.length);
+  const lengthRatio = longer ? shorter / longer : 0;
+
   if (
-    Math.min(simpleName.length, simpleTarget.length) >= 4 &&
-    (simpleName.includes(simpleTarget) || simpleTarget.includes(simpleName))
+    lengthRatio >= 0.65 &&
+    (name.includes(target) || target.includes(name))
   ) {
-    return 0.9;
+    return 0.82 + 0.08 * lengthRatio;
   }
 
   const spelling = editSimilarity(simpleName, simpleTarget);
@@ -106,12 +110,14 @@ function matchScore(candidate, requested) {
     phoneticKey(simpleTarget)
   );
 
-  return Math.max(
+  const base = Math.max(
     spelling,
     tokens * 0.92,
     phonetic * 0.88,
     spelling * 0.65 + phonetic * 0.35
   );
+
+  return lengthRatio < 0.5 ? base * 0.72 : base;
 }
 
 function chooseBestMatch(items, requested, getName, minimumScore = 0.52) {
