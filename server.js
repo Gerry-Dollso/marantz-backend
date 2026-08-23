@@ -10,6 +10,9 @@ const HEOS_PORT = 1255;
 const PLAYER_ID = '48723103';
 const HTTP_PORT = 3100;
 
+let pendingTidalVoiceSearch = null;
+let tidalVoiceSearchSequence = 0;
+
 function sendCommand(port, command, matcher, timeoutMs = 2000) {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection({ host: AVR_HOST, port });
@@ -575,10 +578,36 @@ async function semanticCommandControl(command) {
   );
 
   if (tidalAlbumMatch) {
-    return playTidalAlbumByArtist(
-      tidalAlbumMatch[1],
-      tidalAlbumMatch[2]
-    );
+    try {
+      return await playTidalAlbumByArtist(
+        tidalAlbumMatch[1],
+        tidalAlbumMatch[2]
+      );
+    } catch (error) {
+      const safeFailure =
+        /^TIDAL (?:artist|album|track) not found safely:/.test(
+          String(error.message || '')
+        );
+
+      if (!safeFailure) {
+        throw error;
+      }
+
+      pendingTidalVoiceSearch = {
+        id: ++tidalVoiceSearchSequence,
+        query: tidalAlbumMatch[2].trim(),
+        heard: text,
+        requestedTitle: tidalAlbumMatch[1].trim(),
+        reason: error.message,
+        createdAt: Date.now()
+      };
+
+      return {
+        ok: false,
+        action: 'search-required',
+        ...pendingTidalVoiceSearch
+      };
+    }
   }
 
   const transportPhrases = {
@@ -632,6 +661,26 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 500, { error: error.message });
     }
     return;
+  }
+
+  if (
+    req.method === 'GET' &&
+    req.url.startsWith('/api/tidal/voice-search')
+  ) {
+    const url = new URL(req.url, 'http://localhost');
+    const after = Number(url.searchParams.get('after') || 0);
+
+    const request =
+      pendingTidalVoiceSearch &&
+      pendingTidalVoiceSearch.id > after
+        ? pendingTidalVoiceSearch
+        : null;
+
+    return sendJson(res, 200, {
+      ok: true,
+      pending: Boolean(request),
+      request
+    });
   }
 
   if (req.method === 'GET' && req.url.startsWith('/api/tidal/browse?')) {
