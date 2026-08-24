@@ -28,6 +28,8 @@ function createTidalArtistVoiceControl({
   playerId,
   selectTidalSource
 }) {
+  const artistCache = new Map();
+
   async function searchArtists(query) {
     const response = await heosBrowse(
       'heos://browse/search?sid=10&scid=1&search=' + encodeURIComponent(query)
@@ -43,16 +45,33 @@ function createTidalArtistVoiceControl({
 
   async function resolveArtist(requestedArtist) {
     const correctedArtist = correctArtistName(requestedArtist);
+    const cacheKey = normalise(correctedArtist);
+    const cachedArtist = artistCache.get(cacheKey);
+
+    if (cachedArtist) {
+      return {
+        exactArtist: cachedArtist,
+        correctedArtist,
+        cacheHit: true
+      };
+    }
+
     const artists = await searchArtists(correctedArtist);
     const exactArtist = artists.find(
-      item => normalise(item.name) === normalise(correctedArtist)
+      item => normalise(item.name) === cacheKey
     );
 
     if (!exactArtist) {
       throw new Error(`TIDAL artist not found safely: ${requestedArtist}`);
     }
 
-    return { exactArtist, correctedArtist };
+    artistCache.set(cacheKey, exactArtist);
+
+    return {
+      exactArtist,
+      correctedArtist,
+      cacheHit: false
+    };
   }
 
   function getArtistTrackContainer(artistCid) {
@@ -87,7 +106,11 @@ function createTidalArtistVoiceControl({
     const startedAt = Date.now();
 
     const resolveStartedAt = Date.now();
-    const { exactArtist, correctedArtist } = await resolveArtist(requestedArtist);
+    const {
+      exactArtist,
+      correctedArtist,
+      cacheHit
+    } = await resolveArtist(requestedArtist);
     const resolveArtistMs = Date.now() - resolveStartedAt;
 
     const cid = getArtistTrackContainer(exactArtist.cid);
@@ -119,7 +142,11 @@ function createTidalArtistVoiceControl({
 
     console.log(
       'TIDAL ARTIST TIMING:',
-      JSON.stringify({ artist: exactArtist.name, ...timings })
+      JSON.stringify({
+        artist: exactArtist.name,
+        cacheHit,
+        ...timings
+      })
     );
 
     return {
@@ -127,6 +154,7 @@ function createTidalArtistVoiceControl({
       action: 'play-artist',
       artist: exactArtist.name,
       shuffle: true,
+      cacheHit,
       timings,
       match: {
         requestedArtist,
