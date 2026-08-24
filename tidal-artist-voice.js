@@ -50,42 +50,20 @@ function createTidalArtistVoiceControl({ heosBrowse, playerId, selectTidalSource
     return { exactArtist, correctedArtist };
   }
 
-  async function getArtistTracks(artistCid) {
+  function getArtistTrackContainer(artistCid) {
     const artistId = String(artistCid || '')
       .trim()
       .replace('LIBARTIST-', '');
-    const cid = `LIBARTIST-Tracks-${artistId}`;
 
-    const response = await heosBrowse(
-      'heos://browse/browse?sid=10&cid=' + encodeURIComponent(cid),
-      8000
-    );
-
-    const tracks = (response.payload || []).filter(
-      item => item.playable === 'yes' && item.mid
-    );
-
-    return { cid, tracks };
+    return `LIBARTIST-Tracks-${artistId}`;
   }
 
-  async function queueTracks(containerCid, tracks) {
-    if (!tracks.length) {
-      throw new Error('Artist has no playable tracks');
-    }
-
+  async function playArtistContainer(containerCid) {
     await heosBrowse(
       'heos://browse/add_to_queue?pid=' + encodeURIComponent(playerId) +
       '&sid=10&cid=' + encodeURIComponent(containerCid) +
-      '&mid=' + encodeURIComponent(tracks[0].mid) + '&aid=4'
+      '&aid=4'
     );
-
-    for (const track of tracks.slice(1)) {
-      await heosBrowse(
-        'heos://browse/add_to_queue?pid=' + encodeURIComponent(playerId) +
-        '&sid=10&cid=' + encodeURIComponent(containerCid) +
-        '&mid=' + encodeURIComponent(track.mid) + '&aid=3'
-      );
-    }
   }
 
   return async function playArtist(artistName) {
@@ -96,13 +74,13 @@ function createTidalArtistVoiceControl({ heosBrowse, playerId, selectTidalSource
     }
 
     const { exactArtist, correctedArtist } = await resolveArtist(requestedArtist);
-    const { cid, tracks } = await getArtistTracks(exactArtist.cid);
+    const cid = getArtistTrackContainer(exactArtist.cid);
 
     if (typeof selectTidalSource === 'function') {
       await selectTidalSource();
     }
 
-    await queueTracks(cid, tracks);
+    await playArtistContainer(cid);
 
     await heosBrowse(
       'heos://player/set_play_mode?pid=' + encodeURIComponent(playerId) +
@@ -113,7 +91,6 @@ function createTidalArtistVoiceControl({ heosBrowse, playerId, selectTidalSource
       ok: true,
       action: 'play-artist',
       artist: exactArtist.name,
-      queued: tracks.length,
       shuffle: true,
       match: {
         requestedArtist,
