@@ -22,7 +22,12 @@ function correctArtistName(value) {
   return ARTIST_CORRECTIONS.get(key) || String(value || '').trim();
 }
 
-function createTidalArtistVoiceControl({ heosBrowse, playerId, selectTidalSource }) {
+function createTidalArtistVoiceControl({
+  heosBrowse,
+  heosStart,
+  playerId,
+  selectTidalSource
+}) {
   async function searchArtists(query) {
     const response = await heosBrowse(
       'heos://browse/search?sid=10&scid=1&search=' + encodeURIComponent(query)
@@ -59,54 +64,63 @@ function createTidalArtistVoiceControl({ heosBrowse, playerId, selectTidalSource
   }
 
   async function playArtistContainer(containerCid) {
-    await heosBrowse(
+    const command =
       'heos://browse/add_to_queue?pid=' + encodeURIComponent(playerId) +
       '&sid=10&cid=' + encodeURIComponent(containerCid) +
-      '&aid=4'
-    );
+      '&aid=4';
+
+    if (typeof heosStart === 'function') {
+      await heosStart(command);
+      return;
+    }
+
+    await heosBrowse(command);
   }
 
   return async function playArtist(artistName) {
-    const startedAt = Date.now();
-    const timings = {};
-    const mark = (name, since) => {
-      timings[name] = Date.now() - since;
-    };
-
     const requestedArtist = String(artistName || '').trim();
 
     if (!requestedArtist) {
       throw new Error('Missing artist');
     }
 
-    let stepStartedAt = Date.now();
+    const startedAt = Date.now();
+
+    const resolveStartedAt = Date.now();
     const { exactArtist, correctedArtist } = await resolveArtist(requestedArtist);
-    mark('resolveArtistMs', stepStartedAt);
+    const resolveArtistMs = Date.now() - resolveStartedAt;
 
     const cid = getArtistTrackContainer(exactArtist.cid);
 
+    const sourceStartedAt = Date.now();
     if (typeof selectTidalSource === 'function') {
-      stepStartedAt = Date.now();
       await selectTidalSource();
-      mark('selectTidalSourceMs', stepStartedAt);
     }
+    const selectTidalSourceMs = Date.now() - sourceStartedAt;
 
-    stepStartedAt = Date.now();
+    const playStartedAt = Date.now();
     await playArtistContainer(cid);
-    mark('playArtistContainerMs', stepStartedAt);
+    const playArtistContainerMs = Date.now() - playStartedAt;
 
-    stepStartedAt = Date.now();
+    const shuffleStartedAt = Date.now();
     await heosBrowse(
       'heos://player/set_play_mode?pid=' + encodeURIComponent(playerId) +
       '&repeat=off&shuffle=on'
     );
-    mark('setShuffleMs', stepStartedAt);
+    const setShuffleMs = Date.now() - shuffleStartedAt;
 
-    timings.totalMs = Date.now() - startedAt;
-    console.log('TIDAL ARTIST TIMING:', JSON.stringify({
-      artist: exactArtist.name,
-      ...timings
-    }));
+    const timings = {
+      resolveArtistMs,
+      selectTidalSourceMs,
+      playArtistContainerMs,
+      setShuffleMs,
+      totalMs: Date.now() - startedAt
+    };
+
+    console.log(
+      'TIDAL ARTIST TIMING:',
+      JSON.stringify({ artist: exactArtist.name, ...timings })
+    );
 
     return {
       ok: true,
