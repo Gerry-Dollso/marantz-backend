@@ -67,31 +67,53 @@ function createTidalArtistVoiceControl({ heosBrowse, playerId, selectTidalSource
   }
 
   return async function playArtist(artistName) {
+    const startedAt = Date.now();
+    const timings = {};
+    const mark = (name, since) => {
+      timings[name] = Date.now() - since;
+    };
+
     const requestedArtist = String(artistName || '').trim();
 
     if (!requestedArtist) {
       throw new Error('Missing artist');
     }
 
+    let stepStartedAt = Date.now();
     const { exactArtist, correctedArtist } = await resolveArtist(requestedArtist);
+    mark('resolveArtistMs', stepStartedAt);
+
     const cid = getArtistTrackContainer(exactArtist.cid);
 
     if (typeof selectTidalSource === 'function') {
+      stepStartedAt = Date.now();
       await selectTidalSource();
+      mark('selectTidalSourceMs', stepStartedAt);
     }
 
+    stepStartedAt = Date.now();
     await playArtistContainer(cid);
+    mark('playArtistContainerMs', stepStartedAt);
 
+    stepStartedAt = Date.now();
     await heosBrowse(
       'heos://player/set_play_mode?pid=' + encodeURIComponent(playerId) +
       '&repeat=off&shuffle=on'
     );
+    mark('setShuffleMs', stepStartedAt);
+
+    timings.totalMs = Date.now() - startedAt;
+    console.log('TIDAL ARTIST TIMING:', JSON.stringify({
+      artist: exactArtist.name,
+      ...timings
+    }));
 
     return {
       ok: true,
       action: 'play-artist',
       artist: exactArtist.name,
       shuffle: true,
+      timings,
       match: {
         requestedArtist,
         correctedArtist
