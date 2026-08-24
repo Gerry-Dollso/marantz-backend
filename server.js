@@ -654,7 +654,13 @@ async function semanticCommandControl(command) {
         query: tidalAlbumMatch[2].trim(),
         heard: text,
         requestedTitle: tidalAlbumMatch[1].trim(),
-        type: context.type || 'title',
+        type:
+          context.type ||
+          (/^TIDAL artist not found safely:/.test(
+            String(error.message || '')
+          )
+            ? 'artist'
+            : 'title'),
         artist: context.artist || '',
         artistCid: context.artistCid || '',
         reason: error.message,
@@ -812,7 +818,7 @@ const server = http.createServer(async (req, res) => {
       let learned;
       let learnedType;
 
-      if (pendingTidalVoiceSearch.requestedTitle) {
+      if (pendingTidalVoiceSearch.type === 'title') {
         if (!['album', 'track'].includes(selectedType)) {
           return sendJson(res, 400, {
             error: 'Title learning requires album or track type'
