@@ -69,9 +69,15 @@ function createTidalArtistVoiceControl({
       };
     }
 
+    const requestedKey = normalise(requestedArtist);
     const correctedArtist = correctArtistName(requestedArtist);
     const cacheKey = normalise(correctedArtist);
-    const cachedArtist = artistCache.get(cacheKey);
+    const trustedCorrection =
+      ARTIST_CORRECTIONS.has(requestedKey);
+
+    const cachedArtist = trustedCorrection
+      ? artistCache.get(cacheKey)
+      : null;
 
     if (cachedArtist) {
       return {
@@ -87,8 +93,10 @@ function createTidalArtistVoiceControl({
       item => normalise(item.name) === cacheKey
     );
 
-    if (!exactArtist) {
-      throw new Error(`TIDAL artist not found safely: ${requestedArtist}`);
+    if (!exactArtist || !trustedCorrection) {
+      throw new Error(
+        `TIDAL artist not found safely: ${requestedArtist}`
+      );
     }
 
     artistCache.set(cacheKey, exactArtist);
