@@ -56,6 +56,39 @@ function avr(command, prefix) {
   );
 }
 
+async function heosStart(command, timeoutMs = 1000) {
+  const expectedCommand = command
+    .replace(/^heos:\/\//, '')
+    .split('?')[0];
+
+  const line = await sendCommand(
+    HEOS_PORT,
+    command,
+    raw => {
+      try {
+        const response = JSON.parse(raw);
+        return (
+          response.heos &&
+          response.heos.command === expectedCommand
+        );
+      } catch {
+        return false;
+      }
+    },
+    timeoutMs
+  );
+
+  const response = JSON.parse(line);
+
+  if (response.heos.result === 'fail') {
+    throw new Error(
+      response.heos.message || 'HEOS command failed'
+    );
+  }
+
+  return response;
+}
+
 function heosBrowse(command, timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection({ host: AVR_HOST, port: HEOS_PORT });
@@ -464,6 +497,7 @@ const playTidalAlbumByArtist = createTidalVoiceControl({
 
 const playTidalArtist = createTidalArtistVoiceControl({
   heosBrowse,
+  heosStart,
   playerId: PLAYER_ID,
   selectTidalSource: () => semanticSourceControl('tidal')
 });
