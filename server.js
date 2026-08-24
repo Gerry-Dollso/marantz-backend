@@ -641,11 +641,20 @@ async function semanticCommandControl(command) {
         throw error;
       }
 
+      const context =
+        error.tidalVoiceContext &&
+        typeof error.tidalVoiceContext === 'object'
+          ? error.tidalVoiceContext
+          : {};
+
       pendingTidalVoiceSearch = {
         id: ++tidalVoiceSearchSequence,
         query: tidalAlbumMatch[2].trim(),
         heard: text,
         requestedTitle: tidalAlbumMatch[1].trim(),
+        type: context.type || 'title',
+        artist: context.artist || '',
+        artistCid: context.artistCid || '',
         reason: error.message,
         createdAt: Date.now()
       };

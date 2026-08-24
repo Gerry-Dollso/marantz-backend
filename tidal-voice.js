@@ -303,9 +303,18 @@ function createTidalVoiceControl({ heosBrowse, playerId, selectTidalSource }) {
     );
 
     if (!trackMatch) {
-      throw new Error(
+      const error = new Error(
         `TIDAL title not found safely: ${requestedTitle} by ${exactArtist.name}`
       );
+
+      error.tidalVoiceContext = {
+        type: 'title',
+        artist: exactArtist.name,
+        artistCid: exactArtist.cid,
+        requestedTitle
+      };
+
+      throw error;
     }
 
     if (typeof selectTidalSource === 'function') await selectTidalSource();
