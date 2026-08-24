@@ -158,7 +158,12 @@ function chooseBestMatch(items, requested, getName, minimumScore = 0.52) {
   return best && best.score >= minimumScore ? best : null;
 }
 
-function createTidalVoiceControl({ heosBrowse, playerId, selectTidalSource }) {
+function createTidalVoiceControl({
+  heosBrowse,
+  playerId,
+  selectTidalSource,
+  resolveLearnedTitle
+}) {
   async function searchArtists(query) {
     const response = await heosBrowse(
       'heos://browse/search?sid=10&scid=1&search=' + encodeURIComponent(query)
@@ -261,6 +266,62 @@ function createTidalVoiceControl({ heosBrowse, playerId, selectTidalSource }) {
     }
 
     const { exactArtist, correctedArtist } = await resolveArtist(requestedArtist);
+
+    const learnedTitle =
+      typeof resolveLearnedTitle === 'function'
+        ? resolveLearnedTitle(exactArtist.name, requestedTitle)
+        : null;
+
+    if (learnedTitle && learnedTitle.type === 'album') {
+      if (typeof selectTidalSource === 'function') {
+        await selectTidalSource();
+      }
+
+      const queued = await queueAlbum(learnedTitle.cid);
+
+      return {
+        ok: true,
+        action: 'play-album',
+        artist: exactArtist.name,
+        album: learnedTitle.name,
+        albumCid: learnedTitle.cid,
+        queued,
+        learnedAlias: true,
+        match: {
+          requestedArtist,
+          correctedArtist,
+          requestedTitle,
+          titleScore: 1
+        }
+      };
+    }
+
+    if (learnedTitle && learnedTitle.type === 'track') {
+      if (typeof selectTidalSource === 'function') {
+        await selectTidalSource();
+      }
+
+      await playSingleTrack(
+        learnedTitle.cid,
+        learnedTitle.mid
+      );
+
+      return {
+        ok: true,
+        action: 'play-track',
+        artist: exactArtist.name,
+        track: learnedTitle.name,
+        album: '',
+        mid: learnedTitle.mid,
+        learnedAlias: true,
+        match: {
+          requestedArtist,
+          correctedArtist,
+          requestedTitle,
+          titleScore: 1
+        }
+      };
+    }
 
     const albums = await getArtistAlbums(exactArtist.cid);
     const playableAlbums = albums.filter(item => item.playable && item.cid);

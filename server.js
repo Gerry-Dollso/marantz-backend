@@ -496,7 +496,9 @@ async function semanticTransportControl(action) {
 const playTidalAlbumByArtist = createTidalVoiceControl({
   heosBrowse,
   playerId: PLAYER_ID,
-  selectTidalSource: () => semanticSourceControl('tidal')
+  selectTidalSource: () => semanticSourceControl('tidal'),
+  resolveLearnedTitle: (artist, title) =>
+    voiceAliases.getTitle(artist, title)
 });
 
 const playTidalArtist = createTidalArtistVoiceControl({
@@ -783,6 +785,10 @@ const server = http.createServer(async (req, res) => {
         String(url.searchParams.get('name') || '').trim();
       const selectedCid =
         String(url.searchParams.get('cid') || '').trim();
+      const selectedType =
+        String(url.searchParams.get('type') || '').trim();
+      const selectedMid =
+        String(url.searchParams.get('mid') || '').trim();
 
       if (
         !pendingTidalVoiceSearch ||
@@ -790,12 +796,6 @@ const server = http.createServer(async (req, res) => {
       ) {
         return sendJson(res, 409, {
           error: 'Voice search request is no longer pending'
-        });
-      }
-
-      if (pendingTidalVoiceSearch.requestedTitle) {
-        return sendJson(res, 400, {
-          error: 'Artist learning only is enabled at this stage'
         });
       }
 
@@ -809,11 +809,39 @@ const server = http.createServer(async (req, res) => {
         });
       }
 
-      const learned = voiceAliases.learnArtist(
-        pendingTidalVoiceSearch.query,
-        selectedName,
-        selectedCid
-      );
+      let learned;
+      let learnedType;
+
+      if (pendingTidalVoiceSearch.requestedTitle) {
+        if (!['album', 'track'].includes(selectedType)) {
+          return sendJson(res, 400, {
+            error: 'Title learning requires album or track type'
+          });
+        }
+
+        if (selectedType === 'track' && !selectedMid) {
+          return sendJson(res, 400, {
+            error: 'Track learning requires mid'
+          });
+        }
+
+        learned = voiceAliases.learnTitle(
+          pendingTidalVoiceSearch.artist,
+          pendingTidalVoiceSearch.requestedTitle,
+          selectedType,
+          selectedName,
+          selectedCid,
+          selectedMid
+        );
+        learnedType = selectedType;
+      } else {
+        learned = voiceAliases.learnArtist(
+          pendingTidalVoiceSearch.query,
+          selectedName,
+          selectedCid
+        );
+        learnedType = 'artist';
+      }
 
       pendingTidalVoiceSearch = null;
 
@@ -824,7 +852,7 @@ const server = http.createServer(async (req, res) => {
 
       return sendJson(res, 200, {
         ok: true,
-        type: 'artist',
+        type: learnedType,
         learned
       });
     } catch (error) {
