@@ -6,6 +6,9 @@ const { createTidalVoiceControl } = require('./tidal-voice');
 const {
   createTidalArtistVoiceControl
 } = require('./tidal-artist-voice');
+const {
+  createVoiceAliasStore
+} = require('./voice-alias-store');
 
 const AVR_HOST = '192.168.50.220';
 const AVR_PORT = 23;
@@ -15,6 +18,7 @@ const HTTP_PORT = 3100;
 
 let pendingTidalVoiceSearch = null;
 let tidalVoiceSearchSequence = 0;
+const voiceAliases = createVoiceAliasStore();
 
 function sendCommand(port, command, matcher, timeoutMs = 2000) {
   return new Promise((resolve, reject) => {
@@ -499,7 +503,8 @@ const playTidalArtist = createTidalArtistVoiceControl({
   heosBrowse,
   heosStart,
   playerId: PLAYER_ID,
-  selectTidalSource: () => semanticSourceControl('tidal')
+  selectTidalSource: () => semanticSourceControl('tidal'),
+  resolveLearnedArtist: artist => voiceAliases.getArtist(artist)
 });
 
 async function semanticCommandControl(command) {
@@ -756,6 +761,66 @@ const server = http.createServer(async (req, res) => {
       pending: Boolean(request),
       request
     });
+  }
+
+  if (
+    req.method === 'POST' &&
+    req.url.startsWith('/api/tidal/voice-learn')
+  ) {
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      const requestId = Number(url.searchParams.get('id') || 0);
+      const selectedName =
+        String(url.searchParams.get('name') || '').trim();
+      const selectedCid =
+        String(url.searchParams.get('cid') || '').trim();
+
+      if (
+        !pendingTidalVoiceSearch ||
+        requestId !== pendingTidalVoiceSearch.id
+      ) {
+        return sendJson(res, 409, {
+          error: 'Voice search request is no longer pending'
+        });
+      }
+
+      if (pendingTidalVoiceSearch.requestedTitle) {
+        return sendJson(res, 400, {
+          error: 'Artist learning only is enabled at this stage'
+        });
+      }
+
+      if (
+        Date.now() - pendingTidalVoiceSearch.createdAt >
+        10 * 60 * 1000
+      ) {
+        pendingTidalVoiceSearch = null;
+        return sendJson(res, 410, {
+          error: 'Voice search request expired'
+        });
+      }
+
+      const learned = voiceAliases.learnArtist(
+        pendingTidalVoiceSearch.query,
+        selectedName,
+        selectedCid
+      );
+
+      pendingTidalVoiceSearch = null;
+
+      console.log(
+        'VOICE ALIAS LEARNED:',
+        JSON.stringify(learned)
+      );
+
+      return sendJson(res, 200, {
+        ok: true,
+        type: 'artist',
+        learned
+      });
+    } catch (error) {
+      return sendJson(res, 400, { error: error.message });
+    }
   }
 
   if (req.method === 'GET' && req.url.startsWith('/api/tidal/browse?')) {
