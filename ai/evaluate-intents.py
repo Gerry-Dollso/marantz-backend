@@ -47,9 +47,34 @@ ALLOWED = {
     "play", "pause", "next", "previous", "unknown"
 }
 
-NEGATION_RE = re.compile(r"\b(?:don't|dont|do not|never|not)\b", re.IGNORECASE)
+NEGATION_RE = re.compile(
+    r"\b(?:don't|dont|do not|didn't|didnt|did not|never|not)\b",
+    re.IGNORECASE,
+)
+AVOIDANCE_RE = re.compile(
+    r"(?:\brather\b.*\b(?:didn't|didnt|did not)\b|"
+    r"\b(?:avoid|avoiding)\b|\bstay away from\b|\bbest not\b|"
+    r"\bleave\b.*\b(?:alone|where it is|running|playing|switched on)\b|"
+    r"\bkeep\b.*\b(?:muted|running|playing)\b|"
+    r"\b(?:don't|dont|do not)\s+want\b)",
+    re.IGNORECASE,
+)
 FUTURE_RE = re.compile(
-    r"\b(?:later|tomorrow|tonight|next week|this evening|sometime|after\b|when\s+(?:it|this|that|the|a|an)?\s*(?:next\s+)?(?:song|track|music|playback|programme|program)?\s*(?:starts?|begins?|finishes?|ends?))",
+    r"\b(?:later|tomorrow|tonight|next week|this evening|sometime|in a while|"
+    r"in\s+(?:(?:a|one)\s+)?(?:few\s+)?(?:seconds?|minutes?|hours?)|"
+    r"in\s+\d+\s+(?:seconds?|minutes?|hours?)|"
+    r"at\s+(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)?|(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+o['’]?clock)|"
+    r"once\b|after\b|before\b|when\b)",
+    re.IGNORECASE,
+)
+HYPOTHETICAL_RE = re.compile(
+    r"^(?:if\b|suppose\b|imagine\b|assuming\b|what if\b|were\s+\w+\s+to\b)",
+    re.IGNORECASE,
+)
+REPORTED_SPEECH_RE = re.compile(
+    r"^(?:(?:he|she|they|someone|somebody)\b.*\b(?:said|asked|told|shouted|yelled)\b|"
+    r"(?:the|a)\s+(?:message|instructions?|note|text)\b.*\b(?:says?|said|tells?|asks?)\b|"
+    r"i\s+(?:heard|was told)\b.*\b(?:say|said|ask|asked|tell|told)\b)",
     re.IGNORECASE,
 )
 QUESTION_START_RE = re.compile(
@@ -60,9 +85,21 @@ POLITE_COMMAND_START_RE = re.compile(
     r"^(?:(?:could|would|can|will)\s+you\b|(?:can|could|may)\s+i\s+(?:have|get)\b|please\b)",
     re.IGNORECASE,
 )
-OBSERVATION_START_RE = re.compile(r"^(?:the|this|that|it|my|your|our|playback|aux|phono|cd|tidal|heos)\b", re.IGNORECASE)
+OBSERVATION_START_RE = re.compile(
+    r"^(?:the|this|that|it|my|your|our|we|we're|we are|i|i'm|i am|playback|sound|audio|music|receiver|amp|amplifier|television|projector|aux|phono|cd|tidal|heos)\b",
+    re.IGNORECASE,
+)
 OBSERVATION_ACTION_RE = re.compile(
-    r"\b(?:icon|showing|shows|uses|looks|seems|currently|already|source is|input is|current source|current input|is the current source|is the current input|has stopped|has started|has paused|is stopped|is paused|is playing|is connected to|connected to|is for|was the previous|is the next|was the next|is the previous)\b",
+    r"\b(?:icon|showing|shows|uses|looks|seems|currently|already|at present|right now|remains|feeds|coming through|"
+    r"source is|input is|current source|current input|is the current source|is the current input|"
+    r"has stopped|has started|has paused|is stopped|is paused|is playing|is connected to|connected to|is for|"
+    r"was the previous|is the next|was the next|is the previous|is selected|selected right now|"
+    r"what we're listening to|what we are listening to|stopped on its own|came back by itself|came back on its own|"
+    r"stayed on|nearly over|listening quite|hear(?:ing)?\s+the\s+music\s+clearly)\b",
+    re.IGNORECASE,
+)
+UNRELATED_DEVICE_RE = re.compile(
+    r"^(?:the\s+)?(?:doorbell|alarm|telephone|phone|kettle|fan|vacuum|hoover|washing machine|dryer|lamp|light)\b.*\b(?:loud|quiet|noisy|faint|volume|turn(?:ing)?\s+(?:up|down))\b",
     re.IGNORECASE,
 )
 AUDIO_RESTORE_RE = re.compile(
@@ -80,7 +117,11 @@ def safety_gate(command: str):
     text = " ".join(str(command).strip().split())
     if not text:
         return "empty"
-    if NEGATION_RE.search(text):
+    if REPORTED_SPEECH_RE.search(text):
+        return "reported_speech"
+    if HYPOTHETICAL_RE.search(text):
+        return "hypothetical"
+    if NEGATION_RE.search(text) or AVOIDANCE_RE.search(text):
         return "negation"
     if FUTURE_RE.search(text):
         return "future"
@@ -88,6 +129,8 @@ def safety_gate(command: str):
         return "question"
     if text.endswith("?") and not POLITE_COMMAND_START_RE.search(text):
         return "question"
+    if UNRELATED_DEVICE_RE.search(text):
+        return "unrelated"
     if OBSERVATION_START_RE.search(text) and OBSERVATION_ACTION_RE.search(text):
         return "observation"
     return None
