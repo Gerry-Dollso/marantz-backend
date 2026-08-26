@@ -5,6 +5,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -123,6 +124,10 @@ def main():
     passed = 0
     timings = []
     failures = []
+    categories = defaultdict(lambda: {"passed": 0, "total": 0})
+    unsafe_false_positives = 0
+    missed_commands = 0
+    wrong_actions = 0
 
     print(f"Model: {model}", flush=True)
     print(f"Cases: {len(cases)} ({cases_path.name})", flush=True)
@@ -134,6 +139,19 @@ def main():
         timings.append(elapsed)
         ok = actual == case["expected"]
         passed += int(ok)
+
+        category = str(case.get("category") or "uncategorized")
+        categories[category]["total"] += 1
+        categories[category]["passed"] += int(ok)
+
+        if not ok:
+            if case["expected"] == "unknown" and actual not in (None, "unknown"):
+                unsafe_false_positives += 1
+            elif case["expected"] != "unknown" and actual in (None, "unknown"):
+                missed_commands += 1
+            elif case["expected"] != "unknown" and actual not in (None, "unknown"):
+                wrong_actions += 1
+
         status = "PASS" if ok else "FAIL"
         print(
             f"{index:02d}. {status}  expected={case['expected']:<13} "
@@ -153,11 +171,24 @@ def main():
     print(f"AVERAGE WALL TIME: {average:.3f}s per request", flush=True)
     print(f"WARM AVERAGE (excluding first request): {warm_average:.3f}s", flush=True)
 
+    if len(categories) > 1 or "uncategorized" not in categories:
+        print("\nCATEGORY RESULTS:", flush=True)
+        for name in sorted(categories):
+            stats = categories[name]
+            pct = 100.0 * stats["passed"] / stats["total"] if stats["total"] else 0.0
+            print(f"- {name}: {stats['passed']}/{stats['total']} = {pct:.1f}%", flush=True)
+
+    print("\nERROR TYPES:", flush=True)
+    print(f"- unsafe false positives: {unsafe_false_positives}", flush=True)
+    print(f"- missed legitimate commands: {missed_commands}", flush=True)
+    print(f"- wrong-action substitutions: {wrong_actions}", flush=True)
+
     if failures:
         print("\nFAILURES:", flush=True)
         for failure in failures:
+            category = failure.get("category", "uncategorized")
             print(
-                f"- expected={failure['expected']} actual={failure['actual']} raw={failure['raw']!r}: "
+                f"- [{category}] expected={failure['expected']} actual={failure['actual']} raw={failure['raw']!r}: "
                 f"{failure['command']}",
                 flush=True,
             )
