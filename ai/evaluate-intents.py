@@ -62,7 +62,7 @@ POLITE_COMMAND_START_RE = re.compile(
 )
 OBSERVATION_START_RE = re.compile(r"^(?:the|this|that|it|my|your|our|playback|aux|phono|cd|tidal|heos)\b", re.IGNORECASE)
 OBSERVATION_ACTION_RE = re.compile(
-    r"\b(?:icon|showing|shows|uses|looks|seems|currently|already|source is|input is|has stopped|has started|has paused|is stopped|is paused|is playing|is connected to|connected to|is for|was the previous|is the next|was the next|is the previous)\b",
+    r"\b(?:icon|showing|shows|uses|looks|seems|currently|already|source is|input is|current source|current input|is the current source|is the current input|has stopped|has started|has paused|is stopped|is paused|is playing|is connected to|connected to|is for|was the previous|is the next|was the next|is the previous)\b",
     re.IGNORECASE,
 )
 AUDIO_RESTORE_RE = re.compile(
