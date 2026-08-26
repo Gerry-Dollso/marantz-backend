@@ -8,7 +8,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CASES_PATH = ROOT / "ai" / "intent-eval.json"
+DEFAULT_CASES_PATH = ROOT / "ai" / "intent-eval.json"
 SERVER_URL = "http://127.0.0.1:8080"
 DEFAULT_MODEL = "ggml-org/Qwen3-4B-GGUF:Q4_K_M"
 SYSTEM = (
@@ -102,8 +102,21 @@ def classify(command: str):
     return actual, raw, elapsed, json.dumps(result, ensure_ascii=False)
 
 
+def resolve_cases_path():
+    if len(sys.argv) < 2:
+        return DEFAULT_CASES_PATH
+    requested = Path(sys.argv[1])
+    if not requested.is_absolute():
+        requested = ROOT / requested
+    return requested
+
+
 def main():
-    cases = json.loads(CASES_PATH.read_text())
+    cases_path = resolve_cases_path()
+    if not cases_path.exists():
+        raise SystemExit(f"Missing case file: {cases_path}")
+
+    cases = json.loads(cases_path.read_text())
     check_server()
     model = get_server_model()
 
@@ -112,7 +125,7 @@ def main():
     failures = []
 
     print(f"Model: {model}", flush=True)
-    print(f"Cases: {len(cases)}", flush=True)
+    print(f"Cases: {len(cases)} ({cases_path.name})", flush=True)
     print(f"Server: {SERVER_URL} (chat completions)", flush=True)
     print(flush=True)
 
