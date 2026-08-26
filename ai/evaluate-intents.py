@@ -64,7 +64,7 @@ FUTURE_RE = re.compile(
     r"in\s+(?:(?:a|one)\s+)?(?:few\s+)?(?:seconds?|minutes?|hours?)|"
     r"in\s+\d+\s+(?:seconds?|minutes?|hours?)|"
     r"at\s+(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)?|(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+o['’]?clock)|"
-    r"once\b|after\b|before\b|when\b)",
+    r"once\b|after\b|when\b|before\s+(?:the|this|that|a|an|i|we|you|he|she|they)\b)",
     re.IGNORECASE,
 )
 HYPOTHETICAL_RE = re.compile(
