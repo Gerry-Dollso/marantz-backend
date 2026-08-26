@@ -11,18 +11,15 @@ ROOT = Path(__file__).resolve().parents[1]
 CASES_PATH = ROOT / "ai" / "intent-eval.json"
 SERVER_URL = "http://127.0.0.1:8080"
 MODEL = "ggml-org/Qwen3-1.7B-GGUF:Q4_K_M"
-GRAMMAR = (
-    'root ::= "power_on" | "power_off" | "volume_up" | "volume_down" | '
-    '"mute" | "unmute" | "source_phono" | "source_cd" | "source_tidal" | '
-    '"source_tv" | "source_aux" | "play" | "pause" | "next" | "previous" | "unknown"'
-)
 SYSTEM = (
-    "You interpret natural spoken requests for a home audio system. "
-    "Infer an intent only when the speaker clearly wants the audio system to change state. "
+    "You classify spoken commands for a Marantz home audio system. "
+    "Infer an intent only when the speaker clearly wants the system to change state. "
     "Direct requests and clear complaints about the current audio can imply an action. "
     "Complaints that the audio is too loud mean volume_down; complaints that it is too quiet mean volume_up. "
-    "Mere observations, compliments, descriptions, questions, or conversation that do not clearly request a change must be unknown. "
-    "When uncertain, choose unknown. Reply with only the allowed intent. Command: "
+    "Reply with only one of these exact intents: power_on, power_off, volume_up, volume_down, mute, unmute, "
+    "source_phono, source_cd, source_tidal, source_tv, source_aux, play, pause, next, previous, unknown. "
+    "Mere observations, compliments, descriptions, questions and conversation that do not clearly request a change are unknown. "
+    "When uncertain, choose unknown."
 )
 ALLOWED = {
     "power_on", "power_off", "volume_up", "volume_down", "mute", "unmute",
@@ -57,20 +54,25 @@ def check_server():
 
 def classify(command: str):
     payload = {
-        "prompt": SYSTEM + command,
-        "n_predict": 20,
+        "messages": [
+            {"role": "system", "content": SYSTEM},
+            {"role": "user", "content": command},
+        ],
         "temperature": 0,
-        "grammar": GRAMMAR,
-        "cache_prompt": True,
+        "max_tokens": 20,
     }
     started = time.perf_counter()
     try:
-        result = request_json("/completion", payload, timeout=30)
+        result = request_json("/v1/chat/completions", payload, timeout=30)
         elapsed = time.perf_counter() - started
     except (urllib.error.URLError, TimeoutError) as exc:
         return None, time.perf_counter() - started, str(exc)
 
-    actual = str(result.get("content", "")).strip()
+    try:
+        actual = str(result["choices"][0]["message"]["content"]).strip()
+    except (KeyError, IndexError, TypeError):
+        actual = None
+
     if actual not in ALLOWED:
         actual = None
     return actual, elapsed, json.dumps(result, ensure_ascii=False)
@@ -86,7 +88,7 @@ def main():
 
     print(f"Model: {MODEL}", flush=True)
     print(f"Cases: {len(cases)}", flush=True)
-    print(f"Server: {SERVER_URL}", flush=True)
+    print(f"Server: {SERVER_URL} (chat completions)", flush=True)
     print(flush=True)
 
     for index, case in enumerate(cases, 1):
