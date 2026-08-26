@@ -9,12 +9,15 @@ const {
 const {
   createVoiceAliasStore
 } = require('./voice-alias-store');
+const { classifyIntent } = require('./ai/intent-classifier');
+const { executeIntent } = require('./ai/intent-action-router');
 
 const AVR_HOST = '192.168.50.220';
 const AVR_PORT = 23;
 const HEOS_PORT = 1255;
 const PLAYER_ID = '48723103';
 const HTTP_PORT = 3100;
+const AI_FALLBACK_ENABLED = process.env.MARANTZ_AI_FALLBACK === '1';
 
 let pendingTidalVoiceSearch = null;
 let tidalVoiceSearchSequence = 0;
@@ -729,6 +732,50 @@ async function semanticCommandControl(command) {
   throw new Error('Unknown command');
 }
 
+async function semanticCommandControlWithAi(command) {
+  try {
+    return await semanticCommandControl(command);
+  } catch (error) {
+    if (String(error.message || '') !== 'Unknown command') {
+      throw error;
+    }
+  }
+
+  if (!AI_FALLBACK_ENABLED) {
+    throw new Error('Unknown command');
+  }
+
+  let classification;
+  try {
+    classification = await classifyIntent(command);
+  } catch (error) {
+    console.error('AI CLASSIFIER FAILED:', error.message);
+    throw new Error('Unknown command');
+  }
+
+  if (!classification || classification.intent === 'unknown') {
+    throw new Error('Unknown command');
+  }
+
+  const execution = await executeIntent(classification.intent, {
+    power: semanticPowerControl,
+    volume: semanticVolumeControl,
+    mute: semanticMuteControl,
+    source: semanticSourceControl,
+    transport: semanticTransportControl
+  });
+
+  if (!execution.executed) {
+    throw new Error('Unknown command');
+  }
+
+  return {
+    ...execution.result,
+    ai: true,
+    intent: classification.intent
+  };
+}
+
 function sendJson(res, statusCode, value) {
   res.writeHead(statusCode);
   res.end(JSON.stringify(value));
@@ -1079,7 +1126,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(
         res,
         200,
-        await semanticCommandControl(command)
+        await semanticCommandControlWithAi(command)
       );
     } catch (error) {
       return sendJson(res, 500, { error: error.message });
@@ -1136,5 +1183,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(HTTP_PORT, '0.0.0.0', () => {
-  console.log(`Marantz backend listening on port ${HTTP_PORT}`);
+  console.log(`Marantz backend listening on port ${HTTP_PORT}; AI fallback ${AI_FALLBACK_ENABLED ? 'enabled' : 'disabled'}`);
 });
