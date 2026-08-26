@@ -35,7 +35,7 @@ function resolveIntentAction(intent) {
   return INTENT_ACTIONS[intent] || null;
 }
 
-function readBackendStatus(timeoutMs = 1500) {
+function readBackendStatus(timeoutMs = 4500) {
   return new Promise((resolve, reject) => {
     const request = http.get({
       host: '127.0.0.1',
@@ -67,7 +67,7 @@ async function verifySourceSelection(source, options = {}) {
   }
 
   const readStatus = options.readStatus || readBackendStatus;
-  const deadline = Date.now() + (options.timeoutMs || 2500);
+  const deadline = Date.now() + (options.timeoutMs || 6500);
   let lastInput = '';
 
   while (Date.now() < deadline) {
