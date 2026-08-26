@@ -47,7 +47,10 @@ ALLOWED = {
 }
 
 NEGATION_RE = re.compile(r"\b(?:don't|dont|do not|never|not)\b", re.IGNORECASE)
-FUTURE_RE = re.compile(r"\b(?:later|tomorrow|tonight|next week|this evening|sometime)\b", re.IGNORECASE)
+FUTURE_RE = re.compile(
+    r"\b(?:later|tomorrow|tonight|next week|this evening|sometime|when (?:it|this|that|the (?:song|track|music|playback)) (?:starts?|begins?|finishes?|ends?))\b",
+    re.IGNORECASE,
+)
 QUESTION_START_RE = re.compile(
     r"^(?:is|are|am|was|were|did|does|do|has|have|had|which|what|why|when|where|who|how|should|could|would|can)\b",
     re.IGNORECASE,
@@ -56,9 +59,9 @@ POLITE_COMMAND_START_RE = re.compile(
     r"^(?:could|would|can|will)\s+you\b|^(?:please\b)",
     re.IGNORECASE,
 )
-OBSERVATION_START_RE = re.compile(r"^(?:the|this|that|it|my|your|our)\b", re.IGNORECASE)
+OBSERVATION_START_RE = re.compile(r"^(?:the|this|that|it|my|your|our|playback)\b", re.IGNORECASE)
 OBSERVATION_ACTION_RE = re.compile(
-    r"\b(?:icon|showing|shows|uses|looks|seems|currently|already|source is|input is)\b",
+    r"\b(?:icon|showing|shows|uses|looks|seems|currently|already|source is|input is|has stopped|has started|has paused|is stopped|is paused|is playing)\b",
     re.IGNORECASE,
 )
 
