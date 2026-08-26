@@ -64,6 +64,14 @@ OBSERVATION_ACTION_RE = re.compile(
     r"\b(?:icon|showing|shows|uses|looks|seems|currently|already|source is|input is|has stopped|has started|has paused|is stopped|is paused|is playing)\b",
     re.IGNORECASE,
 )
+AUDIO_RESTORE_RE = re.compile(
+    r"\b(?:sound|audio)\b.*\b(?:back|again|restore|return)\b|\b(?:back|restore|return)\b.*\b(?:sound|audio)\b",
+    re.IGNORECASE,
+)
+DEVICE_POWER_RE = re.compile(
+    r"\b(?:marantz|receiver|amp|amplifier|system|power)\b",
+    re.IGNORECASE,
+)
 
 
 def safety_gate(command: str):
@@ -82,6 +90,14 @@ def safety_gate(command: str):
     if OBSERVATION_START_RE.search(text) and OBSERVATION_ACTION_RE.search(text):
         return "observation"
     return None
+
+
+def disambiguate(command: str, actual):
+    """Apply narrow deterministic corrections to otherwise valid AI intents."""
+    text = " ".join(str(command).strip().split())
+    if actual == "power_on" and AUDIO_RESTORE_RE.search(text) and not DEVICE_POWER_RE.search(text):
+        return "unmute", "audio_restore"
+    return actual, None
 
 
 def request_json(path, payload=None, timeout=30):
@@ -122,7 +138,7 @@ def check_server():
 def classify(command: str):
     gate_reason = safety_gate(command)
     if gate_reason:
-        return "unknown", f"safety:{gate_reason}", 0.0, "", gate_reason
+        return "unknown", f"safety:{gate_reason}", 0.0, "", gate_reason, None
 
     payload = {
         "messages": [
@@ -137,7 +153,7 @@ def classify(command: str):
         result = request_json("/v1/chat/completions", payload, timeout=30)
         elapsed = time.perf_counter() - started
     except (urllib.error.URLError, TimeoutError) as exc:
-        return None, "", time.perf_counter() - started, str(exc), None
+        return None, "", time.perf_counter() - started, str(exc), None, None
 
     try:
         raw = str(result["choices"][0]["message"]["content"]).strip()
@@ -145,7 +161,8 @@ def classify(command: str):
         raw = ""
 
     actual = raw if raw in ALLOWED else None
-    return actual, raw, elapsed, json.dumps(result, ensure_ascii=False), None
+    actual, correction = disambiguate(command, actual)
+    return actual, raw, elapsed, json.dumps(result, ensure_ascii=False), None, correction
 
 
 def resolve_cases_path():
@@ -174,6 +191,7 @@ def main():
     missed_commands = 0
     wrong_actions = 0
     gated = defaultdict(int)
+    corrected = defaultdict(int)
 
     print(f"Model: {model}", flush=True)
     print(f"Cases: {len(cases)} ({cases_path.name})", flush=True)
@@ -181,11 +199,13 @@ def main():
     print(flush=True)
 
     for index, case in enumerate(cases, 1):
-        actual, raw, elapsed, debug, gate_reason = classify(case["command"])
+        actual, raw, elapsed, debug, gate_reason, correction = classify(case["command"])
         if gate_reason:
             gated[gate_reason] += 1
         else:
             timings.append(elapsed)
+        if correction:
+            corrected[correction] += 1
         ok = actual == case["expected"]
         passed += int(ok)
 
@@ -203,13 +223,14 @@ def main():
 
         status = "PASS" if ok else "FAIL"
         gate_label = f" gate={gate_reason}" if gate_reason else ""
+        correction_label = f" correction={correction}" if correction else ""
         print(
             f"{index:02d}. {status}  expected={case['expected']:<13} "
-            f"actual={str(actual):<13} {elapsed:5.2f}s{gate_label}  {case['command']}",
+            f"actual={str(actual):<13} {elapsed:5.2f}s{gate_label}{correction_label}  {case['command']}",
             flush=True,
         )
         if not ok:
-            failures.append({**case, "actual": actual, "raw": raw, "debug": debug, "gate": gate_reason})
+            failures.append({**case, "actual": actual, "raw": raw, "debug": debug, "gate": gate_reason, "correction": correction})
 
     accuracy = 100.0 * passed / len(cases) if cases else 0.0
     average = sum(timings) / len(timings) if timings else 0.0
@@ -233,6 +254,11 @@ def main():
     for reason in sorted(gated):
         print(f"- {reason}: {gated[reason]}", flush=True)
 
+    print("\nPOST-AI CORRECTIONS:", flush=True)
+    print(f"- total corrections: {sum(corrected.values())}", flush=True)
+    for reason in sorted(corrected):
+        print(f"- {reason}: {corrected[reason]}", flush=True)
+
     print("\nERROR TYPES:", flush=True)
     print(f"- unsafe false positives: {unsafe_false_positives}", flush=True)
     print(f"- missed legitimate commands: {missed_commands}", flush=True)
@@ -243,8 +269,9 @@ def main():
         for failure in failures:
             category = failure.get("category", "uncategorized")
             gate = f" gate={failure['gate']}" if failure.get("gate") else ""
+            correction = f" correction={failure['correction']}" if failure.get("correction") else ""
             print(
-                f"- [{category}] expected={failure['expected']} actual={failure['actual']} raw={failure['raw']!r}{gate}: "
+                f"- [{category}] expected={failure['expected']} actual={failure['actual']} raw={failure['raw']!r}{gate}{correction}: "
                 f"{failure['command']}",
                 flush=True,
             )
