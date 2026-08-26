@@ -62,15 +62,51 @@ function createVoiceAliasStore(filePath = null) {
     const key = normalise(heard);
     if (!key) return null;
 
-    const entry = state.artists[key];
-    if (!entry || !entry.name || !entry.cid) return null;
+    const exactEntry = state.artists[key];
+    if (exactEntry && exactEntry.name && exactEntry.cid) {
+      return {
+        heard: key,
+        name: String(exactEntry.name),
+        cid: String(exactEntry.cid),
+        confirmations: Number(exactEntry.confirmations) || 1,
+        updatedAt: Number(exactEntry.updatedAt) || 0
+      };
+    }
+
+    // If Whisper now transcribes the real canonical artist name, reuse a
+    // previously confirmed target rather than forcing another search. Only do
+    // this when every confirmed entry for that canonical name agrees on one
+    // artist CID; ambiguous canonical-name collisions still fail closed.
+    const canonicalMatches = Object.values(state.artists)
+      .filter(entry => (
+        entry &&
+        entry.name &&
+        entry.cid &&
+        normalise(entry.name) === key
+      ));
+
+    if (!canonicalMatches.length) return null;
+
+    const cids = new Set(canonicalMatches.map(entry => String(entry.cid)));
+    if (cids.size !== 1) return null;
+
+    const newest = canonicalMatches.reduce((best, entry) => (
+      (Number(entry.updatedAt) || 0) > (Number(best.updatedAt) || 0)
+        ? entry
+        : best
+    ));
 
     return {
       heard: key,
-      name: String(entry.name),
-      cid: String(entry.cid),
-      confirmations: Number(entry.confirmations) || 1,
-      updatedAt: Number(entry.updatedAt) || 0
+      name: String(newest.name),
+      cid: String(newest.cid),
+      confirmations: canonicalMatches.reduce(
+        (total, entry) => total + (Number(entry.confirmations) || 1),
+        0
+      ),
+      updatedAt: Math.max(
+        ...canonicalMatches.map(entry => Number(entry.updatedAt) || 0)
+      )
     };
   }
 
