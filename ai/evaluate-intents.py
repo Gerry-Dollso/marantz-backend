@@ -13,13 +13,23 @@ SERVER_URL = "http://127.0.0.1:8080"
 MODEL = "ggml-org/Qwen3-1.7B-GGUF:Q4_K_M"
 SYSTEM = (
     "You classify spoken commands for a Marantz home audio system. "
-    "Infer an intent only when the speaker clearly wants the system to change state. "
-    "Direct requests and clear complaints about the current audio can imply an action. "
-    "Complaints that the audio is too loud mean volume_down; complaints that it is too quiet mean volume_up. "
-    "Reply with only one of these exact intents: power_on, power_off, volume_up, volume_down, mute, unmute, "
-    "source_phono, source_cd, source_tidal, source_tv, source_aux, play, pause, next, previous, unknown. "
-    "Mere observations, compliments, descriptions, questions and conversation that do not clearly request a change are unknown. "
-    "When uncertain, choose unknown."
+    "Infer an intent only when the speaker clearly wants the system to change state now. "
+    "Use these meanings exactly: "
+    "power_on means turn the Marantz on; power_off means turn it off or put it in standby; "
+    "volume_up means make the current audio louder; volume_down means make it quieter; "
+    "mute means silence audio; unmute means restore muted audio; "
+    "source_phono means select PHONO or the record player; source_cd means select CD; "
+    "source_tidal means select TIDAL or HEOS as the source; source_tv means select the TV source; "
+    "source_aux means select AUX or the projector source; "
+    "play means resume current playback; pause means pause current playback; "
+    "next means skip to the next track; previous means go back to the previous track. "
+    "Direct requests and clear complaints about current audio can imply an action. "
+    "If audio is too loud choose volume_down; if it is too quiet choose volume_up. "
+    "Questions, observations, compliments, hypothetical or future statements, and unsupported requests must be unknown. "
+    "A phrase beginning with play is not automatically the playback-control intent: play is only for resuming current playback. "
+    "When uncertain, choose unknown. "
+    "Reply with only one exact intent token from: power_on, power_off, volume_up, volume_down, mute, unmute, "
+    "source_phono, source_cd, source_tidal, source_tv, source_aux, play, pause, next, previous, unknown."
 )
 ALLOWED = {
     "power_on", "power_off", "volume_up", "volume_down", "mute", "unmute",
@@ -66,16 +76,15 @@ def classify(command: str):
         result = request_json("/v1/chat/completions", payload, timeout=30)
         elapsed = time.perf_counter() - started
     except (urllib.error.URLError, TimeoutError) as exc:
-        return None, time.perf_counter() - started, str(exc)
+        return None, "", time.perf_counter() - started, str(exc)
 
     try:
-        actual = str(result["choices"][0]["message"]["content"]).strip()
+        raw = str(result["choices"][0]["message"]["content"]).strip()
     except (KeyError, IndexError, TypeError):
-        actual = None
+        raw = ""
 
-    if actual not in ALLOWED:
-        actual = None
-    return actual, elapsed, json.dumps(result, ensure_ascii=False)
+    actual = raw if raw in ALLOWED else None
+    return actual, raw, elapsed, json.dumps(result, ensure_ascii=False)
 
 
 def main():
@@ -92,7 +101,7 @@ def main():
     print(flush=True)
 
     for index, case in enumerate(cases, 1):
-        actual, elapsed, debug = classify(case["command"])
+        actual, raw, elapsed, debug = classify(case["command"])
         total_time += elapsed
         ok = actual == case["expected"]
         passed += int(ok)
@@ -103,7 +112,7 @@ def main():
             flush=True,
         )
         if not ok:
-            failures.append({**case, "actual": actual, "debug": debug})
+            failures.append({**case, "actual": actual, "raw": raw, "debug": debug})
 
     accuracy = 100.0 * passed / len(cases) if cases else 0.0
     average = total_time / len(cases) if cases else 0.0
@@ -115,7 +124,7 @@ def main():
         print("\nFAILURES:", flush=True)
         for failure in failures:
             print(
-                f"- expected={failure['expected']} actual={failure['actual']}: "
+                f"- expected={failure['expected']} actual={failure['actual']} raw={failure['raw']!r}: "
                 f"{failure['command']}",
                 flush=True,
             )
