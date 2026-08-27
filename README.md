@@ -2,159 +2,66 @@
 
 Companion media/orchestration backend for marantzPI. It runs on the HP EliteDesk media server and exposes HEOS/TIDAL library operations plus validated semantic control used by the Raspberry Pi touchscreen and voice listener.
 
-## Current known-good state
+## Current known-good state — 27 Aug 2026
 
-Active deployed/development branch:
+Active deployed/development branch: `local-ai-development`.
 
-```text
-local-ai-development
-```
+Current repository checkpoint before this documentation update: `064fd53 — Add guarded TIDAL semantic integration migration`.
 
-Current live local-AI checkpoint:
+The service is deployed at `/opt/marantz-backend` and runs as system service `marantz-backend.service`, HTTP port 3100. HEOS uses TCP 1255. The persistent local Qwen classifier is provided separately by `marantz-ai.service` on `127.0.0.1:8080`.
 
-```text
-c6505b0 — Allow full backend status time during source verification
-```
+AI fallback is enabled on the HP through `MARANTZ_AI_FALLBACK=1`. Without that flag, unknown natural-language commands remain fail-closed and the deterministic command path is retained.
 
-The service is deployed at `/opt/marantz-backend` on the media server and runs as the system service:
+## Architecture and safety boundary
 
-```text
-marantz-backend.service
-```
+The Raspberry Pi remains the touchscreen/display/controller. The HP backend is the central media/orchestration layer.
 
-It listens on HTTP port 3100 and communicates with HEOS on TCP port 1255. The persistent local Qwen classifier is provided separately by `marantz-ai.service` on `127.0.0.1:8080`.
-
-On the current HP deployment the AI command fallback is enabled through the systemd drop-in environment variable:
-
-```text
-MARANTZ_AI_FALLBACK=1
-```
-
-The repository code remains fail-closed: if that variable is absent, the existing deterministic `/api/command` behaviour is used and unknown natural-language commands do not reach AI execution.
-
-## Architecture
-
-The Raspberry Pi remains the touchscreen/display/controller. This HP backend is the central media/orchestration layer for operations that should not live in the touchscreen process.
-
-Current responsibilities include:
-
-- HEOS/TIDAL library search and browse operations proxied from marantzPI.
-- Semantic AVR control for power, source, volume, mute and transport.
-- TIDAL artist, album and track voice requests.
-- Safe voice-search fallback when an artist/title cannot be matched confidently.
-- Persistent voice aliases for speech-recognition errors.
-- Persistent artist and title/track learning confirmed from the marantzPI touchscreen.
-- Guarded local-AI interpretation of natural Marantz/home-audio commands.
-
-The live local-AI command flow is deliberately hybrid:
+The command architecture is deliberately hybrid:
 
 ```text
 voice/transcription
-  -> existing deterministic command parser first
-  -> only on exact Unknown command: deterministic safety gate
+  -> deterministic command/TIDAL parsing first
+  -> deterministic safety gate where AI fallback is needed
   -> local Qwen semantic classifier
   -> validated intent token
-  -> narrow deterministic post-AI correction where justified
-  -> intent-to-action router
+  -> deterministic action router
   -> existing semantic backend controls
   -> SR8015 / HEOS
 ```
 
-The AI does not receive arbitrary shell, filesystem or receiver command access. It may only select from the validated intent vocabulary and those intents map onto existing deterministic control functions.
-
-If AI fails, returns an invalid token, returns `unknown`, or the safety gate rejects the phrase, the command fails closed as `Unknown command` and no AI action is executed.
+AI never receives arbitrary shell, filesystem or AVR command access. Invalid/unknown interpretation fails closed. Safety has priority over command recall: a missed legitimate command is preferable to an unsafe false positive.
 
 ## Local AI classifier
 
-Current model used on the HP:
+Current HP model: `ggml-org/Qwen3-4B-GGUF:Q4_K_M`, served persistently by llama.cpp and classified through `/v1/chat/completions`.
+
+Validated receiver intent vocabulary:
 
 ```text
-ggml-org/Qwen3-4B-GGUF:Q4_K_M
-```
-
-It runs persistently through llama.cpp `llama-server`. Classification uses `/v1/chat/completions`; do not regress it to raw `/completion` without evidence, because applying the Qwen chat template was a major accuracy improvement during development.
-
-Current validated intent vocabulary:
-
-```text
-power_on
-power_off
-volume_up
-volume_down
-mute
-unmute
-source_phono
-source_cd
-source_tidal
-source_tv
-source_aux
-play
-pause
-next
-previous
+power_on power_off
+volume_up volume_down
+mute unmute
+source_phono source_cd source_tidal source_tv source_aux
+play pause next previous
 unknown
 ```
 
-The deterministic safety gate rejects non-immediate/non-command language such as negations, questions, observations, future/deferred statements, hypotheticals, reported speech and recognised unrelated-device descriptions. Safety is intentionally prioritised over forcing every phrase into an action.
-
-## AI benchmark checkpoint
-
-The benchmark/evaluation implementation was ported from Python to production JavaScript and the production JS classifier matched the Python result exactly on the fresh adversarial blind set.
-
-Current regression results after the generalized safety gate:
+Production JS benchmark checkpoint:
 
 ```text
-Fresh adversarial blind set: 116/121 = 95.9%
-  unsafe false positives: 0
-  missed legitimate commands: 4
-  wrong-action substitutions: 1
-
-Final validation set: 125/126 = 99.2%
-  unsafe false positives: 0
-  missed legitimate commands: 1
-  wrong-action substitutions: 0
-
-Adversarial development set: 80/80 = 100.0%
-  unsafe false positives: 0
-  missed legitimate commands: 0
-  wrong-action substitutions: 0
-
-Older holdout: 48/50 = 96.0%
-  unsafe false positives: 0
-  missed legitimate commands: 2
-  wrong-action substitutions: 0
+Fresh adversarial blind: 116/121 = 95.9%, 0 unsafe false positives
+Final validation:       125/126 = 99.2%, 0 unsafe false positives
+Adversarial development: 80/80 = 100%, 0 unsafe false positives
+Older holdout:           48/50 = 96.0%, 0 unsafe false positives
 ```
 
-Do not tune merely to make these scores read 100%. A conservative missed legitimate command is preferable to an unsafe false positive. The 121-case blind set must remain untouched as a historical stress-test record now that its results have influenced development.
+Do not tune merely to make these historical scores 100%. The 121-case blind set is now a historical stress-test record.
 
-## Live AI verification completed
+## AVR semantic controls
 
-The production JS classifier was first exercised in dry-run mode with no receiver actions, then the intent action router was separately dry-tested before integration.
+User-level control routes include power, source, volume, mute and transport. Source mappings remain backend policy. `phono` selects Smart Select 1 / the receiver's renamed 8K input, not the physical PHONO input.
 
-Live hardware tests have confirmed both sides of the guarded path:
-
-- Natural immediate request `its a bit loud in here` reached the AI fallback, classified as `volume_down`, and changed receiver volume by the existing 0.5 dB semantic step.
-- Deferred `mute this in a while` returned `Unknown command` and left mute state unchanged.
-- Opinion/question `do you think this is too loud` returned `Unknown command` and left volume unchanged.
-- Reported speech `he just said turn it down` returned `Unknown command` and left volume unchanged.
-- Natural source request `lets listen to a record` classified as `source_phono`, changed the source, and passed live source verification before reporting success.
-
-Existing deterministic commands still run before AI. Existing TIDAL artist/album/title handling remains before the fallback and has not been replaced.
-
-## Semantic control API
-
-The backend provides user-level intentions rather than exposing arbitrary receiver commands:
-
-- `POST /api/control/power?state=on|standby`
-- `POST /api/control/source?source=phono|cd|heos|tidal|tv|aux`
-- `POST /api/control/volume?action=up|down`
-- `POST /api/control/volume?action=set&value=<dB>`
-- `POST /api/control/mute?state=on|off|toggle`
-- `POST /api/control/transport?action=play|pause|next|previous`
-
-Source mappings remain backend policy. `phono` recalls Smart Select 1, which selects the receiver's renamed 8K input rather than the physical PHONO input.
-
-Measured live SR8015 `SI?` responses captured on 26 Aug 2026 are:
+Measured SR8015 `SI?` responses:
 
 ```text
 phono -> SI8K
@@ -164,30 +71,100 @@ tv    -> SITV
 aux   -> SIAUX1
 ```
 
-AI-driven source actions use these measured values for post-action verification. AUX retains the pre-existing Speaker Preset 1 behaviour.
+AI source actions verify these measured values after execution. AUX retains Speaker Preset 1 behaviour.
 
-## TIDAL / voice integration
+## TIDAL semantic contract
 
-The backend supports the Pi's TIDAL browse/play routes and the voice-search/learning flow. Persistent learned aliases are runtime state and must not be replaced with guessed hard-coded corrections simply to make a test pass.
+TIDAL voice semantics now deliberately distinguish playback type and browsing/navigation intent. Do not collapse these paths back into one generic title search.
 
-The voice-learning design deliberately requires safe matching or user confirmation for uncertain new artists/titles. Preserve that safety property when adding or extending AI interpretation.
+Examples:
+
+```text
+Play songs by IDLES                 -> play artist
+Play the album TANGK by IDLES       -> play album only
+Play the song Gift Horse by IDLES   -> play track only
+Play Gift Horse by IDLES            -> legacy automatic title resolution
+Show me IDLES                       -> artist overview
+Show me albums by IDLES             -> albums view
+Show me songs by IDLES              -> tracks view
+Show me artists similar to IDLES    -> similar-artists view
+Tell me about IDLES                 -> artist-info view
+```
+
+Critical invariant: SHOW/BROWSE actions must never start playback.
+
+Current semantic regression suites:
+
+```bash
+node ai/test-tidal-semantic-contract.js
+node ai/test-tidal-semantic-router.js
+node ai/test-tidal-live-adapter.js
+node ai/test-tidal-title-type.js
+```
+
+These verify that artist/album/track playback remain distinct, explicit album requests resolve only albums, explicit track requests resolve only tracks, legacy auto-title resolution remains available, browse intents fail closed until their Pi UI handlers exist, and unrelated receiver commands are untouched.
+
+The guarded migration `ai/apply-tidal-semantic-integration.js` integrated this layer into live `server.js`. On the HP it created `server.js.before-tidal-semantic-integration` as a local safety backup.
+
+Live verification on 27 Aug established:
+
+- `Show me IDLES` classified as show/artist/overview, returned `not-supported-yet`, and did not start playback.
+- An explicit TANGK album request remained on the album path and successfully started the IDLES album despite ASR rendering TANGK as `Tank` in one test.
+- An explicit track request remained on the track path and safely generated `search-required` when the ASR/title match was insufficient rather than substituting an album or unrelated playback.
+
+## Voice learning and ASR boundary
+
+Runtime voice learning lives in `~/.local/state/marantz-backend/voice-aliases.json`; it is state, not repository source.
+
+Earlier learning stored misheard aliases such as `chaos -> Kyuss`. Exact learned aliases still work, but canonical-name resolution was hardened so partial collisions do not rewrite genuine names: e.g. `Chaos UK` must not become Kyuss. Ambiguous canonical collisions fail closed.
+
+The important architectural direction is now to improve speech recognition with trusted canonical music vocabulary rather than accumulating hard-coded mistake substitutions such as `Kang = TANGK` or `guest horse = Gift Horse`.
+
+The separate `marantz-voice` repository now builds a Whisper initial prompt from canonical artist names confirmed in the backend alias state while deliberately excluding the misheard alias strings. This changed a troublesome live IDLES test from repeated variants such as Adolph/Adels/idols to the correct transcription `Play IDLES`, followed by successful artist playback.
+
+Do not undo the touchscreen confirmation/search workflow for genuinely uncertain new artists or titles. Safe matching or user confirmation remains required.
+
+## Voice development status — PAUSED
+
+Further ASR/microphone tuning is deliberately paused as of 27 Aug 2026.
+
+The temporary microphone is a miniDSP UMIK-1 measurement microphone. A Seeed Studio ReSpeaker USB Mic Array v2.0, part 107990193, has been ordered for the final far-field voice front end. Resume voice tuning only after it arrives so the ASR is tuned against representative hardware rather than the temporary UMIK-1.
+
+When voice development resumes, first compare identical phrases on the new microphone, including IDLES, TANGK and Gift Horse. Then investigate extending trusted prompt vocabulary beyond artists to saved TIDAL albums/tracks without creating dangerous alias collisions or excessive prompt size.
+
+The voice listener backend HTTP timeout is 20 seconds because valid TIDAL album operations can exceed the former 10-second client timeout even when playback succeeds.
+
+## Next independent phase: rich TIDAL browsing
+
+Rich/Roon-like TIDAL UI/backend work can continue while voice development is paused.
+
+Desired artist experience includes:
+
+- artist artwork/header;
+- biography/info;
+- songs/popular tracks;
+- albums;
+- similar/related artists;
+- room for additional metadata later.
+
+Before designing the UI, inspect the existing marantzPI TIDAL UI and backend/HEOS capabilities and establish exactly which metadata can be obtained reliably. Do not design around guessed API availability.
+
+Prefer a canonical artist data model keyed by TIDAL artist CID, capable of representing canonical name, artwork, biography, albums, tracks and similar artists. The existing show/browse semantic contract was intentionally created so future voice navigation can target these views without redesigning playback semantics.
 
 ## Development rules
 
-Before editing, confirm branch, working tree, file locations and service state. Do not guess ownership, paths or service scope.
-
-The normal SSH workflow is Termius on Android, where large multi-line pastes can be corrupted. Prefer safe GitHub-side repository edits. Give the HP operator small sequential commands for pull, syntax checks, service operations and hardware testing. Do not ask for large manual file pastes through Termius unless there is a specific reason.
-
-After backend JavaScript changes, at minimum run the relevant `node --check` commands and `git diff --check` where applicable before restarting `marantz-backend.service`.
-
-For hardware tests, explicitly state in advance when a command will physically change AVR power, source, volume, mute or playback. Prefer read-only status checks when a hardware change is not necessary.
-
-Do not commit credentials, `.env` files, logs, runtime alias state, private configuration or machine-specific secrets.
+- Before editing, confirm branch, working tree, paths, ownership and service state. Never guess them.
+- The normal SSH client is Termius on Android; large multiline pastes are error-prone. Prefer safe GitHub-side edits and small sequential terminal commands for pull, syntax checks, service operations and hardware tests.
+- After JavaScript changes run relevant `node --check`, regression tests and `git diff --check` where applicable before restarting the service.
+- State in advance when a test will physically change AVR power/source/volume/mute/playback. Prefer read-only tests when possible.
+- Do not patch individual benchmark sentences. Fix reusable language/behaviour classes.
+- Do not commit credentials, `.env`, logs, runtime alias state, private configuration or machine-specific secrets.
+- Preserve known-good behaviour and fail closed when uncertain.
 
 ## Project scope
 
-This repository is only for the marantzPI / HP backend system. Unrelated computers, repairs, emulation/Batocera systems and other projects are outside this architecture and must not be used as assumptions for hardware, storage, networking or software decisions.
+This repository is only for the marantzPI / HP backend system. Unrelated computers, repairs and emulation/Batocera projects are outside this architecture.
 
-## Housekeeping policy
+## Housekeeping
 
-Temporary `server.js.before-*`, `server.js.phase-*`, `*.backup-*`, log and environment files are ignored by Git. One-off hard-coded diagnostic scripts should not be retained when equivalent tests can be run directly during troubleshooting.
+Temporary `server.js.before-*`, `server.js.phase-*`, `*.backup-*`, logs and environment files are ignored. One-off hard-coded diagnostic scripts should not be retained when equivalent tests can be run directly during troubleshooting.
