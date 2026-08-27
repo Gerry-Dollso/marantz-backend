@@ -9,7 +9,7 @@ Active deployed/development branch: `local-ai-development`.
 Current tested functional checkpoint:
 
 ```text
-ebb4b65 — Add TIDAL track artist metadata endpoint
+60eefcc — Cache TIDAL browse containers in memory
 ```
 
 The service is deployed at `/opt/marantz-backend` and runs as system service `marantz-backend.service`, HTTP port 3100. HEOS uses TCP 1255. The persistent local Qwen classifier is provided separately by `marantz-ai.service` on `127.0.0.1:8080`.
@@ -85,6 +85,38 @@ aux   -> SIAUX1
 
 AI source actions verify these measured values after execution. AUX retains Speaker Preset 1 behaviour.
 
+## TIDAL browse memory cache
+
+Read-only `/api/tidal/browse` responses are accelerated by `tidal-browse-cache.js`, a bounded in-memory LRU cache using stale-while-revalidate semantics. This is specifically intended to hide the long HEOS pagination delay for large saved-library containers without allowing cache storage to grow indefinitely.
+
+The cache is memory-only: nothing is persisted to disk, so it cannot gradually consume drive space. It is capped at 64 container/page entries; least-recently-used entries are evicted when the cap is exceeded. A backend restart simply starts with an empty cache.
+
+The high-value library containers are the actual HEOS CIDs:
+
+```text
+My Music
+My Music-Artists
+My Music-Albums
+My Music-Tracks
+My Music-Playlists
+```
+
+These become eligible for a background refresh after 15 seconds while their last known value may be used for up to 12 hours if necessary. Other recently browsed containers refresh after two minutes and have a two-hour maximum stale window. Only one refresh for a given cache key may run at once, preventing repeated touchscreen requests from creating duplicate HEOS scans.
+
+On a cache hit the backend returns the known result immediately and, when the refresh threshold has passed, updates it from HEOS in the background. Additions/removals therefore replace the cached result without forcing the touchscreen to wait for the refresh. If a forced HEOS refresh fails and a previous value exists, the previous value is retained as a fallback within the configured stale limit.
+
+Live test of the real `My Music-Artists` container on 27 Aug 2026 returned 392 saved artists. The cold HEOS pagination took approximately 8.934 seconds; the immediate cached request took approximately 0.009 seconds. The stale-while-revalidate behaviour was subsequently verified from the real MarantzPi touchscreen after the 15-second refresh threshold: the artist list continued to display immediately while the backend refreshed it behind the scenes.
+
+Cache diagnostics are included in browse JSON as `cached`, `cacheAgeMs` and `refreshing`; existing Pi code can ignore these fields. Playback and queue mutation paths are deliberately not served from this browse-response cache; authoritative HEOS operations remain separate.
+
+Cache checkpoint sequence:
+
+```text
+f6b6f23 — Add guarded TIDAL browse cache migration
+bada46d — Fix TIDAL browse cache library CIDs
+60eefcc — Cache TIDAL browse containers in memory
+```
+
 ## TIDAL semantic contract
 
 TIDAL voice semantics deliberately distinguish playback type and browsing/navigation intent. Do not collapse these paths back into one generic title search.
@@ -132,22 +164,7 @@ Current read-only metadata endpoint:
 GET /api/tidal/metadata/track-artists?mid=<TIDAL track id>
 ```
 
-It validates the MID as numeric, requests `/v2/tracks/{id}?countryCode=GB&include=artists`, and returns only canonical track/artist identity information such as:
-
-```json
-{
-  "ok": true,
-  "trackId": "1349014",
-  "title": "Because You're Frightened",
-  "artists": [
-    {
-      "id": "64520",
-      "cid": "LIBARTIST-64520",
-      "name": "Magazine"
-    }
-  ]
-}
-```
+It validates the MID as numeric, requests `/v2/tracks/{id}?countryCode=GB&include=artists`, and returns only canonical track/artist identity information.
 
 Live testing proved this resolves the playing track to the correct canonical artist even when TIDAL search returns multiple different artists with the same visible name. The Pi now uses this endpoint for Now Playing artist-name navigation rather than fuzzy/name-only matching.
 
@@ -236,15 +253,7 @@ Rich/Roon-like TIDAL UI/backend work can continue while voice development is pau
 
 The first functional artist-navigation phase is now proven: the Pi exposes Tracks, Albums, EP n Singles, Other Albums and Similar, Artist -> Tracks has list-style playback/queue controls, and Now Playing can jump directly to the canonical artist or album while playback continues.
 
-Desired richer artist experience still includes:
-
-- artist artwork/header;
-- songs/popular tracks;
-- albums/EPs/singles;
-- similar/related artists;
-- available artist metadata such as popularity/external links where useful;
-- biography only if a reliable accessible source is established later;
-- room for additional metadata later.
+Desired richer artist experience still includes artist artwork/header, songs/popular tracks, albums/EPs/singles, similar/related artists, available artist metadata such as popularity/external links where useful, biography only if a reliable accessible source is established later, and room for additional metadata later.
 
 Prefer a canonical artist data model keyed by TIDAL artist CID. The new metadata client should be extended for additional official TIDAL relationships when useful rather than reintroducing name-guessing. Do not design around guessed API availability. The existing show/browse semantic contract was intentionally created so future voice navigation can target these views without redesigning playback semantics.
 
