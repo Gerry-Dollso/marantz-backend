@@ -9,20 +9,14 @@ Active deployed/development branch: `local-ai-development`.
 Current tested functional checkpoint:
 
 ```text
-60eefcc — Cache TIDAL browse containers in memory
+51c3135 — Add full TIDAL favourite tracks playback
 ```
 
 The service is deployed at `/opt/marantz-backend` and runs as system service `marantz-backend.service`, HTTP port 3100. HEOS uses TCP 1255. The persistent local Qwen classifier is provided separately by `marantz-ai.service` on `127.0.0.1:8080`.
 
 AI fallback is enabled on the HP through `MARANTZ_AI_FALLBACK=1`. Without that flag, unknown natural-language commands remain fail-closed and the deterministic command path is retained.
 
-The TIDAL developer application client ID/secret are deployed outside Git in the protected environment file:
-
-```text
-/etc/marantz-backend/tidal.env
-```
-
-`marantz-backend.service` loads that file through a systemd drop-in. Never commit these credentials or copy them into repository configuration. The backend reads them only through `process.env.TIDAL_CLIENT_ID` and `process.env.TIDAL_CLIENT_SECRET`.
+The TIDAL developer application client ID/secret are deployed outside Git in `/etc/marantz-backend/tidal.env`. `marantz-backend.service` loads that file through a systemd drop-in. Never commit these credentials or copy them into repository configuration.
 
 ## Architecture and safety boundary
 
@@ -41,7 +35,7 @@ voice/transcription
   -> SR8015 / HEOS
 ```
 
-AI never receives arbitrary shell, filesystem or AVR command access. Invalid/unknown interpretation fails closed. Safety has priority over command recall: a missed legitimate command is preferable to an unsafe false positive.
+AI never receives arbitrary shell, filesystem or AVR command access. Invalid/unknown interpretation fails closed. Safety has priority over command recall.
 
 ## Local AI classifier
 
@@ -67,7 +61,7 @@ Adversarial development: 80/80 = 100%, 0 unsafe false positives
 Older holdout:           48/50 = 96.0%, 0 unsafe false positives
 ```
 
-Do not tune merely to make these historical scores 100%. The 121-case blind set is now a historical stress-test record.
+Do not tune merely to make these historical scores 100%.
 
 ## AVR semantic controls
 
@@ -83,15 +77,13 @@ tv    -> SITV
 aux   -> SIAUX1
 ```
 
-AI source actions verify these measured values after execution. AUX retains Speaker Preset 1 behaviour.
-
 ## TIDAL browse memory cache
 
-Read-only `/api/tidal/browse` responses are accelerated by `tidal-browse-cache.js`, a bounded in-memory LRU cache using stale-while-revalidate semantics. This is specifically intended to hide the long HEOS pagination delay for large saved-library containers without allowing cache storage to grow indefinitely.
+Read-only `/api/tidal/browse` responses are accelerated by `tidal-browse-cache.js`, a bounded in-memory LRU cache using stale-while-revalidate semantics.
 
-The cache is memory-only: nothing is persisted to disk, so it cannot gradually consume drive space. It is capped at 64 container/page entries; least-recently-used entries are evicted when the cap is exceeded. A backend restart simply starts with an empty cache.
+The cache is memory-only, capped at 64 entries, and never writes browse data to disk. Least-recently-used entries are evicted when the cap is exceeded; a backend restart simply starts with an empty cache.
 
-The high-value library containers are the actual HEOS CIDs:
+High-value HEOS CIDs are:
 
 ```text
 My Music
@@ -101,13 +93,11 @@ My Music-Tracks
 My Music-Playlists
 ```
 
-These become eligible for a background refresh after 15 seconds while their last known value may be used for up to 12 hours if necessary. Other recently browsed containers refresh after two minutes and have a two-hour maximum stale window. Only one refresh for a given cache key may run at once, preventing repeated touchscreen requests from creating duplicate HEOS scans.
+These become eligible for background refresh after 15 seconds and may use the last known result for up to 12 hours if HEOS is unavailable. Other recently browsed containers use a two-minute refresh threshold and two-hour maximum stale window. Only one refresh per cache key may run at once.
 
-On a cache hit the backend returns the known result immediately and, when the refresh threshold has passed, updates it from HEOS in the background. Additions/removals therefore replace the cached result without forcing the touchscreen to wait for the refresh. If a forced HEOS refresh fails and a previous value exists, the previous value is retained as a fallback within the configured stale limit.
+On a cache hit, the backend returns the known result immediately and refreshes it in the background when due. Live testing of `My Music-Artists` returned 392 artists: cold HEOS pagination took about 8.934 seconds; the immediate cached request took about 0.009 seconds. The stale-while-revalidate path was then verified on the real touchscreen.
 
-Live test of the real `My Music-Artists` container on 27 Aug 2026 returned 392 saved artists. The cold HEOS pagination took approximately 8.934 seconds; the immediate cached request took approximately 0.009 seconds. The stale-while-revalidate behaviour was subsequently verified from the real MarantzPi touchscreen after the 15-second refresh threshold: the artist list continued to display immediately while the backend refreshed it behind the scenes.
-
-Cache diagnostics are included in browse JSON as `cached`, `cacheAgeMs` and `refreshing`; existing Pi code can ignore these fields. Playback and queue mutation paths are deliberately not served from this browse-response cache; authoritative HEOS operations remain separate.
+Cache diagnostics are included as `cached`, `cacheAgeMs` and `refreshing`; the Pi can ignore them.
 
 Cache checkpoint sequence:
 
@@ -115,6 +105,60 @@ Cache checkpoint sequence:
 f6b6f23 — Add guarded TIDAL browse cache migration
 bada46d — Fix TIDAL browse cache library CIDs
 60eefcc — Cache TIDAL browse containers in memory
+```
+
+## Full TIDAL Favourite Tracks playback
+
+`My Music-Tracks` is now treated as one full saved-track collection rather than a 50-track page for playback purposes. Live HEOS browsing reported **576 favourite tracks** during implementation.
+
+The backend exposes:
+
+```text
+GET /api/tidal/tracks/play-all?shuffle=0|1
+```
+
+The route uses the full cached `My Music-Tracks|all` list, keeps only playable entries with a MID, and then builds the HEOS queue explicitly:
+
+- `shuffle=0`: first favourite is sent with `aid=4`, then remaining MIDs are appended in saved order with `aid=3`.
+- `shuffle=1`: the complete full-library list is Fisher-Yates shuffled first, then the first random track is started with `aid=4` and the remainder are appended in that shuffled order.
+- Queue additions are deliberately sequential rather than concurrent because sequential HEOS command handling has proven reliable.
+- Playback begins from the first selected track before the whole 576-track queue is finished; the remainder builds quietly behind playback.
+
+This means Play All and Shuffle All are genuinely full-library operations rather than 50-track-page operations. In live testing, the queue grew beyond the old 50-track ceiling while playback continued normally. Shuffle All produced a random opening sequence (for example Joy Division -> Blue Oyster Cult -> Black Flag) and continued appending the rest in the already-randomised order.
+
+### Critical HEOS CID rule
+
+For this TIDAL container, HEOS requires the literal-space CID:
+
+```text
+My Music-Tracks
+```
+
+Do **not** send `My%20Music-Tracks` to HEOS for `browse/browse` or `browse/add_to_queue`.
+
+Live testing proved that:
+
+```text
+browse/add_to_queue ... cid=My Music-Tracks&mid=484193&aid=4
+```
+
+created a one-track queue containing Morcheeba - Trigger Hippie, and appending MID `49258737` with `aid=3` correctly added Sonic Youth - Teen Age Riot from beyond the old 50-track boundary.
+
+An earlier experimental route encoded the CID as `My%20Music-Tracks`. HEOS interpreted that differently and returned the wrong higher-level TIDAL container (`What's New`), which also poisoned the shared `My Music-Tracks|all` cache because the experimental loader reused the same key. A backend restart cleared that bad in-memory entry. Preserve the existing pattern:
+
+```js
+encodeURIComponent(cid).replace(/%20/g, ' ')
+```
+
+when constructing HEOS commands for these `My Music-*` CIDs.
+
+Checkpoint sequence:
+
+```text
+0a966c2 — Add guarded favourite tracks play-all migration
+b6e0230 — Fix favourite Tracks HEOS CID handling
+2cec949 — Fix Favourite Tracks HEOS CID self reference
+51c3135 — Add full TIDAL favourite tracks playback
 ```
 
 ## TIDAL semantic contract
@@ -137,23 +181,6 @@ Tell me about IDLES                 -> artist-info view
 
 Critical invariant: SHOW/BROWSE actions must never start playback.
 
-Current semantic regression suites:
-
-```bash
-node ai/test-tidal-semantic-contract.js
-node ai/test-tidal-semantic-router.js
-node ai/test-tidal-live-adapter.js
-node ai/test-tidal-title-type.js
-```
-
-These verify that artist/album/track playback remain distinct, explicit album requests resolve only albums, explicit track requests resolve only tracks, legacy auto-title resolution remains available, browse intents fail closed until their Pi UI handlers exist, and unrelated receiver commands are untouched.
-
-The guarded migration `ai/apply-tidal-semantic-integration.js` integrated this layer into live `server.js`. On the HP it created `server.js.before-tidal-semantic-integration` as a local safety backup. The resulting live integration was committed as:
-
-```text
-4f3ac1e — Apply live TIDAL semantic integration
-```
-
 ## TIDAL metadata client and canonical identity
 
 `tidal-metadata-client.js` is the isolated official TIDAL OpenAPI metadata client. It uses the developer app client credentials from the service environment, caches the client-credentials bearer token in memory, refreshes one minute before expiry, and retries once after a 401 by clearing and reacquiring the token.
@@ -164,9 +191,7 @@ Current read-only metadata endpoint:
 GET /api/tidal/metadata/track-artists?mid=<TIDAL track id>
 ```
 
-It validates the MID as numeric, requests `/v2/tracks/{id}?countryCode=GB&include=artists`, and returns only canonical track/artist identity information.
-
-Live testing proved this resolves the playing track to the correct canonical artist even when TIDAL search returns multiple different artists with the same visible name. The Pi now uses this endpoint for Now Playing artist-name navigation rather than fuzzy/name-only matching.
+It resolves the playing TIDAL track to canonical artist IDs/CIDs/names. The Pi uses this for Now Playing artist navigation instead of fuzzy/name-only matching.
 
 Metadata checkpoint sequence:
 
@@ -178,9 +203,7 @@ ebb4b65 — Add TIDAL track artist metadata endpoint
 
 ## TIDAL artist/HEOS capability findings
 
-The rich artist work must be built around data proven available in the live system rather than assumed fields.
-
-Confirmed through the existing HEOS/TIDAL browse API for IDLES (`LIBARTIST-4653420`):
+Confirmed artist root structure:
 
 ```text
 Artist root
@@ -191,21 +214,19 @@ Artist root
   Similar
 ```
 
-`Similar` returns real artist containers (`LIBARTIST-*`) with names and artwork. `Tracks` returns playable songs with MID, artist, album ID and artwork. Albums/EPs/Other Albums return album containers and artwork. These are suitable foundations for the richer artist UI.
+`Similar` returns real `LIBARTIST-*` containers with artwork. Artist Tracks returns playable songs with MID, artist, album ID and artwork.
 
-Direct TIDAL OpenAPI client-credentials access is also proven for artist and track metadata. `/v2/artists/{id}` returns canonical name, popularity and external links. Track `include=artists` returns canonical artist relationships and is now used in production for Pi navigation.
-
-However, biography text is not currently usable by this app: `include=biography` returned an empty `included` array, and a direct request to `/v2/artistBiographies/4653420` returned `404 Resource not found`. Treat biography content as unavailable with the current developer access rather than designing the UI around it or guessing undocumented endpoints.
+Direct TIDAL OpenAPI access is proven for canonical artist and track metadata. Biography text is not currently usable with this developer access; do not design the artist UI around guessed or undocumented biography endpoints.
 
 ## TIDAL queue actions
 
-The backend exposes a generic track queue action endpoint:
+Generic per-track queue endpoint:
 
 ```text
 GET /api/tidal/track/action?cid=<container>&mid=<track>&action=<action>
 ```
 
-Supported actions map to HEOS queue semantics:
+Supported behaviour:
 
 ```text
 play-now       -> aid=1
@@ -215,56 +236,32 @@ play-only      -> aid=4
 play-from-here -> rebuild queue from selected track onward
 ```
 
-`play-from-here` browses the full source container using HEOS pagination, finds the selected MID, replaces the queue with that track, and appends all following playable tracks. This was live-tested against `LIBARTIST-Tracks-4653420`: selecting Dancer started Dancer and Next advanced to I'm Scum, proving that ordering from the selected point is preserved.
-
-All five actions were live-tested against the actual HEOS player and behaved as intended. The existing `/api/tidal/playlist/play` endpoint was also verified to accept `LIBARTIST-Tracks-*` containers for both Play All and Shuffle All, so no separate artist-play-all backend path is required.
-
-Queue-action checkpoint:
-
-```text
-06edb34 — Add TIDAL track queue actions
-```
+Playlist and Artist -> Tracks behaviour has been live-tested. `play-from-here` paginates the source container and reconstructs the queue from the selected MID onward.
 
 ## Voice learning and ASR boundary
 
-Runtime voice learning lives in `~/.local/state/marantz-backend/voice-aliases.json`; it is state, not repository source.
+Runtime voice learning lives in `~/.local/state/marantz-backend/voice-aliases.json`; it is state, not repository source. Exact learned aliases still work, but canonical-name resolution must not allow partial collisions to rewrite genuine artist names.
 
-Earlier learning stored misheard aliases such as `chaos -> Kyuss`. Exact learned aliases still work, but canonical-name resolution was hardened so partial collisions do not rewrite genuine names: e.g. `Chaos UK` must not become Kyuss. Ambiguous canonical collisions fail closed.
-
-The important architectural direction is to improve speech recognition with trusted canonical music vocabulary rather than accumulating hard-coded mistake substitutions such as `Kang = TANGK` or `guest horse = Gift Horse`.
-
-The separate `marantz-voice` repository builds a Whisper initial prompt from canonical artist names confirmed in the backend alias state while deliberately excluding the misheard alias strings. This changed a troublesome live IDLES test from repeated variants such as Adolph/Adels/idols to the correct transcription `Play IDLES`, followed by successful artist playback.
-
-Do not undo the touchscreen confirmation/search workflow for genuinely uncertain new artists or titles. Safe matching or user confirmation remains required.
+Prefer teaching Whisper trusted canonical music vocabulary rather than accumulating one-off transcription substitutions. Keep the touchscreen search/confirmation path for uncertain names.
 
 ## Voice development status — PAUSED
 
-Further ASR/microphone tuning is deliberately paused as of 27 Aug 2026.
-
-The temporary microphone is a miniDSP UMIK-1 measurement microphone. A Seeed Studio ReSpeaker USB Mic Array v2.0, part 107990193, has been ordered for the final far-field voice front end. Resume voice tuning only after it arrives so the ASR is tuned against representative hardware rather than the temporary UMIK-1.
-
-When voice development resumes, first compare identical phrases on the new microphone, including IDLES, TANGK and Gift Horse. Then investigate extending trusted prompt vocabulary beyond artists to saved TIDAL albums/tracks without creating dangerous alias collisions or excessive prompt size.
-
-The voice listener backend HTTP timeout is 20 seconds because valid TIDAL album operations can exceed the former 10-second client timeout even when playback succeeds.
+Further ASR/microphone tuning is intentionally paused pending arrival of a Seeed Studio ReSpeaker USB Mic Array v2.0. Resume voice tuning on representative hardware rather than the temporary miniDSP UMIK-1.
 
 ## Rich TIDAL browsing direction
 
-Rich/Roon-like TIDAL UI/backend work can continue while voice development is paused.
+Rich/Roon-like TIDAL UI/backend work can continue while voice development is paused. The Pi now has My Music root navigation, artist sections, playlist/artist queue controls, Now Playing artist/album navigation, full Favourite Tracks browsing, and full-library Play All/Shuffle All backed by the HP cache.
 
-The first functional artist-navigation phase is now proven: the Pi exposes Tracks, Albums, EP n Singles, Other Albums and Similar, Artist -> Tracks has list-style playback/queue controls, and Now Playing can jump directly to the canonical artist or album while playback continues.
-
-Desired richer artist experience still includes artist artwork/header, songs/popular tracks, albums/EPs/singles, similar/related artists, available artist metadata such as popularity/external links where useful, biography only if a reliable accessible source is established later, and room for additional metadata later.
-
-Prefer a canonical artist data model keyed by TIDAL artist CID. The new metadata client should be extended for additional official TIDAL relationships when useful rather than reintroducing name-guessing. Do not design around guessed API availability. The existing show/browse semantic contract was intentionally created so future voice navigation can target these views without redesigning playback semantics.
+Prefer canonical TIDAL identifiers and proven HEOS containers. Do not design around guessed API availability.
 
 ## Development rules
 
 - Before editing, confirm branch, working tree, paths, ownership and service state. Never guess them.
-- The normal SSH client is Termius on Android; large multiline pastes are error-prone. Prefer safe GitHub-side edits, guarded migration helpers, and small sequential terminal commands for pull, syntax checks, service operations and hardware tests.
+- The normal SSH client is Termius on Android; large multiline pastes are error-prone. Prefer safe GitHub-side edits, guarded migration helpers, and small sequential terminal commands.
 - After JavaScript changes run relevant `node --check`, regression tests and `git diff --check` where applicable before restarting the service.
 - State in advance when a test will physically change AVR power/source/volume/mute/playback. Prefer read-only tests when possible.
 - Do not patch individual benchmark sentences. Fix reusable language/behaviour classes.
-- Do not commit credentials, `.env`, logs, runtime alias state, private configuration or machine-specific secrets. TIDAL client credentials remain in `/etc/marantz-backend/tidal.env` only.
+- Do not commit credentials, `.env`, logs, runtime alias state, private configuration or machine-specific secrets.
 - Preserve known-good behaviour and fail closed when uncertain.
 
 ## Project scope
