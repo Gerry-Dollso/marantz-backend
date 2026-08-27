@@ -257,12 +257,17 @@ function createTidalVoiceControl({
     );
   }
 
-  return async function playByArtist(title, artistName) {
+  return async function playByArtist(title, artistName, requestedType = 'auto') {
     const requestedTitle = String(title || '').trim();
     const requestedArtist = String(artistName || '').trim();
+    const type = String(requestedType || 'auto').trim().toLowerCase();
 
     if (!requestedTitle || !requestedArtist) {
       throw new Error('Missing title or artist');
+    }
+
+    if (!['auto', 'album', 'track'].includes(type)) {
+      throw new Error(`Invalid TIDAL title type: ${requestedType}`);
     }
 
     const { exactArtist, correctedArtist } = await resolveArtist(requestedArtist);
@@ -272,7 +277,11 @@ function createTidalVoiceControl({
         ? resolveLearnedTitle(exactArtist.name, requestedTitle)
         : null;
 
-    if (learnedTitle && learnedTitle.type === 'album') {
+    if (
+      learnedTitle &&
+      learnedTitle.type === 'album' &&
+      type !== 'track'
+    ) {
       if (typeof selectTidalSource === 'function') {
         await selectTidalSource();
       }
@@ -291,12 +300,17 @@ function createTidalVoiceControl({
           requestedArtist,
           correctedArtist,
           requestedTitle,
+          requestedType: type,
           titleScore: 1
         }
       };
     }
 
-    if (learnedTitle && learnedTitle.type === 'track') {
+    if (
+      learnedTitle &&
+      learnedTitle.type === 'track' &&
+      type !== 'album'
+    ) {
       if (typeof selectTidalSource === 'function') {
         await selectTidalSource();
       }
@@ -318,83 +332,91 @@ function createTidalVoiceControl({
           requestedArtist,
           correctedArtist,
           requestedTitle,
+          requestedType: type,
           titleScore: 1
         }
       };
     }
 
-    const albums = await getArtistAlbums(exactArtist.cid);
-    const playableAlbums = albums.filter(item => item.playable && item.cid);
-    const albumMatch = chooseBestMatch(
-      playableAlbums,
-      requestedTitle,
-      item => item.name,
-      0.76
-    );
-
-    if (albumMatch) {
-      if (typeof selectTidalSource === 'function') await selectTidalSource();
-      const queued = await queueAlbum(albumMatch.item.cid);
-
-      return {
-        ok: true,
-        action: 'play-album',
-        artist: exactArtist.name,
-        album: albumMatch.item.name,
-        albumCid: albumMatch.item.cid,
-        queued,
-        match: {
-          requestedArtist,
-          correctedArtist,
-          requestedTitle,
-          titleScore: Number(albumMatch.score.toFixed(3))
-        }
-      };
-    }
-
-    const artistId = String(exactArtist.cid).replace('LIBARTIST-', '');
-    const trackContainerCid = `LIBARTIST-Tracks-${artistId}`;
-    const tracks = await getArtistTracks(exactArtist.cid);
-    const playableTracks = tracks.filter(item => item.playable && item.mid);
-    const trackMatch = chooseBestMatch(
-      playableTracks,
-      requestedTitle,
-      item => item.name,
-      0.64
-    );
-
-    if (!trackMatch) {
-      const error = new Error(
-        `TIDAL title not found safely: ${requestedTitle} by ${exactArtist.name}`
+    if (type !== 'track') {
+      const albums = await getArtistAlbums(exactArtist.cid);
+      const playableAlbums = albums.filter(item => item.playable && item.cid);
+      const albumMatch = chooseBestMatch(
+        playableAlbums,
+        requestedTitle,
+        item => item.name,
+        0.76
       );
 
-      error.tidalVoiceContext = {
-        type: 'title',
-        artist: exactArtist.name,
-        artistCid: exactArtist.cid,
-        requestedTitle
-      };
+      if (albumMatch) {
+        if (typeof selectTidalSource === 'function') await selectTidalSource();
+        const queued = await queueAlbum(albumMatch.item.cid);
 
-      throw error;
+        return {
+          ok: true,
+          action: 'play-album',
+          artist: exactArtist.name,
+          album: albumMatch.item.name,
+          albumCid: albumMatch.item.cid,
+          queued,
+          match: {
+            requestedArtist,
+            correctedArtist,
+            requestedTitle,
+            requestedType: type,
+            titleScore: Number(albumMatch.score.toFixed(3))
+          }
+        };
+      }
     }
 
-    if (typeof selectTidalSource === 'function') await selectTidalSource();
-    await playSingleTrack(trackContainerCid, trackMatch.item.mid);
-
-    return {
-      ok: true,
-      action: 'play-track',
-      artist: exactArtist.name,
-      track: trackMatch.item.name,
-      album: trackMatch.item.album || '',
-      mid: String(trackMatch.item.mid),
-      match: {
-        requestedArtist,
-        correctedArtist,
+    if (type !== 'album') {
+      const artistId = String(exactArtist.cid).replace('LIBARTIST-', '');
+      const trackContainerCid = `LIBARTIST-Tracks-${artistId}`;
+      const tracks = await getArtistTracks(exactArtist.cid);
+      const playableTracks = tracks.filter(item => item.playable && item.mid);
+      const trackMatch = chooseBestMatch(
+        playableTracks,
         requestedTitle,
-        titleScore: Number(trackMatch.score.toFixed(3))
+        item => item.name,
+        0.64
+      );
+
+      if (trackMatch) {
+        if (typeof selectTidalSource === 'function') await selectTidalSource();
+        await playSingleTrack(trackContainerCid, trackMatch.item.mid);
+
+        return {
+          ok: true,
+          action: 'play-track',
+          artist: exactArtist.name,
+          track: trackMatch.item.name,
+          album: trackMatch.item.album || '',
+          mid: String(trackMatch.item.mid),
+          match: {
+            requestedArtist,
+            correctedArtist,
+            requestedTitle,
+            requestedType: type,
+            titleScore: Number(trackMatch.score.toFixed(3))
+          }
+        };
       }
+    }
+
+    const error = new Error(
+      `TIDAL title not found safely: ${requestedTitle} by ${exactArtist.name}`
+    );
+
+    error.tidalVoiceContext = {
+      type: 'title',
+      artist: exactArtist.name,
+      artistCid: exactArtist.cid,
+      requestedTitle,
+      requestedType: type
     };
+
+    throw error;
   };
 }
 
