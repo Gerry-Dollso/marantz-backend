@@ -6,15 +6,23 @@ Companion media/orchestration backend for marantzPI. It runs on the HP EliteDesk
 
 Active deployed/development branch: `local-ai-development`.
 
-Current tested functional checkpoint before this documentation update:
+Current tested functional checkpoint:
 
 ```text
-06edb34 — Add TIDAL track queue actions
+ebb4b65 — Add TIDAL track artist metadata endpoint
 ```
 
 The service is deployed at `/opt/marantz-backend` and runs as system service `marantz-backend.service`, HTTP port 3100. HEOS uses TCP 1255. The persistent local Qwen classifier is provided separately by `marantz-ai.service` on `127.0.0.1:8080`.
 
 AI fallback is enabled on the HP through `MARANTZ_AI_FALLBACK=1`. Without that flag, unknown natural-language commands remain fail-closed and the deterministic command path is retained.
+
+The TIDAL developer application client ID/secret are deployed outside Git in the protected environment file:
+
+```text
+/etc/marantz-backend/tidal.env
+```
+
+`marantz-backend.service` loads that file through a systemd drop-in. Never commit these credentials or copy them into repository configuration. The backend reads them only through `process.env.TIDAL_CLIENT_ID` and `process.env.TIDAL_CLIENT_SECRET`.
 
 ## Architecture and safety boundary
 
@@ -114,11 +122,42 @@ The guarded migration `ai/apply-tidal-semantic-integration.js` integrated this l
 4f3ac1e — Apply live TIDAL semantic integration
 ```
 
-Live verification on 27 Aug established:
+## TIDAL metadata client and canonical identity
 
-- `Show me IDLES` classified as show/artist/overview, returned `not-supported-yet`, and did not start playback.
-- An explicit TANGK album request remained on the album path and successfully started the IDLES album despite ASR rendering TANGK as `Tank` in one test.
-- An explicit track request remained on the track path and safely generated `search-required` when the ASR/title match was insufficient rather than substituting an album or unrelated playback.
+`tidal-metadata-client.js` is the isolated official TIDAL OpenAPI metadata client. It uses the developer app client credentials from the service environment, caches the client-credentials bearer token in memory, refreshes one minute before expiry, and retries once after a 401 by clearing and reacquiring the token.
+
+Current read-only metadata endpoint:
+
+```text
+GET /api/tidal/metadata/track-artists?mid=<TIDAL track id>
+```
+
+It validates the MID as numeric, requests `/v2/tracks/{id}?countryCode=GB&include=artists`, and returns only canonical track/artist identity information such as:
+
+```json
+{
+  "ok": true,
+  "trackId": "1349014",
+  "title": "Because You're Frightened",
+  "artists": [
+    {
+      "id": "64520",
+      "cid": "LIBARTIST-64520",
+      "name": "Magazine"
+    }
+  ]
+}
+```
+
+Live testing proved this resolves the playing track to the correct canonical artist even when TIDAL search returns multiple different artists with the same visible name. The Pi now uses this endpoint for Now Playing artist-name navigation rather than fuzzy/name-only matching.
+
+Metadata checkpoint sequence:
+
+```text
+b8b703d — add cached TIDAL metadata client
+11d616f — add guarded metadata endpoint migration
+ebb4b65 — Add TIDAL track artist metadata endpoint
+```
 
 ## TIDAL artist/HEOS capability findings
 
@@ -137,13 +176,13 @@ Artist root
 
 `Similar` returns real artist containers (`LIBARTIST-*`) with names and artwork. `Tracks` returns playable songs with MID, artist, album ID and artwork. Albums/EPs/Other Albums return album containers and artwork. These are suitable foundations for the richer artist UI.
 
-A direct TIDAL OpenAPI client-credentials probe also confirmed that `/v2/artists/{id}` is available to the developer app and returns richer artist-level metadata including canonical name, popularity and external links (social/official/TIDAL sharing). It also exposes a `biography` relationship whose related type is `artistBiographies`.
+Direct TIDAL OpenAPI client-credentials access is also proven for artist and track metadata. `/v2/artists/{id}` returns canonical name, popularity and external links. Track `include=artists` returns canonical artist relationships and is now used in production for Pi navigation.
 
 However, biography text is not currently usable by this app: `include=biography` returned an empty `included` array, and a direct request to `/v2/artistBiographies/4653420` returned `404 Resource not found`. Treat biography content as unavailable with the current developer access rather than designing the UI around it or guessing undocumented endpoints.
 
 ## TIDAL queue actions
 
-The backend now exposes a generic track queue action endpoint:
+The backend exposes a generic track queue action endpoint:
 
 ```text
 GET /api/tidal/track/action?cid=<container>&mid=<track>&action=<action>
@@ -163,7 +202,7 @@ play-from-here -> rebuild queue from selected track onward
 
 All five actions were live-tested against the actual HEOS player and behaved as intended. The existing `/api/tidal/playlist/play` endpoint was also verified to accept `LIBARTIST-Tracks-*` containers for both Play All and Shuffle All, so no separate artist-play-all backend path is required.
 
-Current tested backend checkpoint:
+Queue-action checkpoint:
 
 ```text
 06edb34 — Add TIDAL track queue actions
@@ -195,7 +234,7 @@ The voice listener backend HTTP timeout is 20 seconds because valid TIDAL album 
 
 Rich/Roon-like TIDAL UI/backend work can continue while voice development is paused.
 
-The first functional artist-navigation phase is now proven: the Pi exposes Tracks, Albums, EP n Singles, Other Albums and Similar, and Artist -> Tracks has list-style playback/queue controls. Future work can improve presentation without discarding these proven semantics.
+The first functional artist-navigation phase is now proven: the Pi exposes Tracks, Albums, EP n Singles, Other Albums and Similar, Artist -> Tracks has list-style playback/queue controls, and Now Playing can jump directly to the canonical artist or album while playback continues.
 
 Desired richer artist experience still includes:
 
@@ -207,7 +246,7 @@ Desired richer artist experience still includes:
 - biography only if a reliable accessible source is established later;
 - room for additional metadata later.
 
-Prefer a canonical artist data model keyed by TIDAL artist CID. Do not design around guessed API availability. The existing show/browse semantic contract was intentionally created so future voice navigation can target these views without redesigning playback semantics.
+Prefer a canonical artist data model keyed by TIDAL artist CID. The new metadata client should be extended for additional official TIDAL relationships when useful rather than reintroducing name-guessing. Do not design around guessed API availability. The existing show/browse semantic contract was intentionally created so future voice navigation can target these views without redesigning playback semantics.
 
 ## Development rules
 
@@ -216,7 +255,7 @@ Prefer a canonical artist data model keyed by TIDAL artist CID. Do not design ar
 - After JavaScript changes run relevant `node --check`, regression tests and `git diff --check` where applicable before restarting the service.
 - State in advance when a test will physically change AVR power/source/volume/mute/playback. Prefer read-only tests when possible.
 - Do not patch individual benchmark sentences. Fix reusable language/behaviour classes.
-- Do not commit credentials, `.env`, logs, runtime alias state, private configuration or machine-specific secrets.
+- Do not commit credentials, `.env`, logs, runtime alias state, private configuration or machine-specific secrets. TIDAL client credentials remain in `/etc/marantz-backend/tidal.env` only.
 - Preserve known-good behaviour and fail closed when uncertain.
 
 ## Project scope
