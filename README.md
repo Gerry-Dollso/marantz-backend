@@ -6,7 +6,11 @@ Companion media/orchestration backend for marantzPI. It runs on the HP EliteDesk
 
 Active deployed/development branch: `local-ai-development`.
 
-Current repository checkpoint before this documentation update: `064fd53 — Add guarded TIDAL semantic integration migration`.
+Current tested functional checkpoint before this documentation update:
+
+```text
+06edb34 — Add TIDAL track queue actions
+```
 
 The service is deployed at `/opt/marantz-backend` and runs as system service `marantz-backend.service`, HTTP port 3100. HEOS uses TCP 1255. The persistent local Qwen classifier is provided separately by `marantz-ai.service` on `127.0.0.1:8080`.
 
@@ -75,7 +79,7 @@ AI source actions verify these measured values after execution. AUX retains Spea
 
 ## TIDAL semantic contract
 
-TIDAL voice semantics now deliberately distinguish playback type and browsing/navigation intent. Do not collapse these paths back into one generic title search.
+TIDAL voice semantics deliberately distinguish playback type and browsing/navigation intent. Do not collapse these paths back into one generic title search.
 
 Examples:
 
@@ -104,7 +108,11 @@ node ai/test-tidal-title-type.js
 
 These verify that artist/album/track playback remain distinct, explicit album requests resolve only albums, explicit track requests resolve only tracks, legacy auto-title resolution remains available, browse intents fail closed until their Pi UI handlers exist, and unrelated receiver commands are untouched.
 
-The guarded migration `ai/apply-tidal-semantic-integration.js` integrated this layer into live `server.js`. On the HP it created `server.js.before-tidal-semantic-integration` as a local safety backup.
+The guarded migration `ai/apply-tidal-semantic-integration.js` integrated this layer into live `server.js`. On the HP it created `server.js.before-tidal-semantic-integration` as a local safety backup. The resulting live integration was committed as:
+
+```text
+4f3ac1e — Apply live TIDAL semantic integration
+```
 
 Live verification on 27 Aug established:
 
@@ -112,15 +120,64 @@ Live verification on 27 Aug established:
 - An explicit TANGK album request remained on the album path and successfully started the IDLES album despite ASR rendering TANGK as `Tank` in one test.
 - An explicit track request remained on the track path and safely generated `search-required` when the ASR/title match was insufficient rather than substituting an album or unrelated playback.
 
+## TIDAL artist/HEOS capability findings
+
+The rich artist work must be built around data proven available in the live system rather than assumed fields.
+
+Confirmed through the existing HEOS/TIDAL browse API for IDLES (`LIBARTIST-4653420`):
+
+```text
+Artist root
+  Tracks
+  Albums
+  EP n Singles
+  Other Albums
+  Similar
+```
+
+`Similar` returns real artist containers (`LIBARTIST-*`) with names and artwork. `Tracks` returns playable songs with MID, artist, album ID and artwork. Albums/EPs/Other Albums return album containers and artwork. These are suitable foundations for the richer artist UI.
+
+A direct TIDAL OpenAPI client-credentials probe also confirmed that `/v2/artists/{id}` is available to the developer app and returns richer artist-level metadata including canonical name, popularity and external links (social/official/TIDAL sharing). It also exposes a `biography` relationship whose related type is `artistBiographies`.
+
+However, biography text is not currently usable by this app: `include=biography` returned an empty `included` array, and a direct request to `/v2/artistBiographies/4653420` returned `404 Resource not found`. Treat biography content as unavailable with the current developer access rather than designing the UI around it or guessing undocumented endpoints.
+
+## TIDAL queue actions
+
+The backend now exposes a generic track queue action endpoint:
+
+```text
+GET /api/tidal/track/action?cid=<container>&mid=<track>&action=<action>
+```
+
+Supported actions map to HEOS queue semantics:
+
+```text
+play-now       -> aid=1
+play-next      -> aid=2
+add-end        -> aid=3
+play-only      -> aid=4
+play-from-here -> rebuild queue from selected track onward
+```
+
+`play-from-here` browses the full source container using HEOS pagination, finds the selected MID, replaces the queue with that track, and appends all following playable tracks. This was live-tested against `LIBARTIST-Tracks-4653420`: selecting Dancer started Dancer and Next advanced to I'm Scum, proving that ordering from the selected point is preserved.
+
+All five actions were live-tested against the actual HEOS player and behaved as intended. The existing `/api/tidal/playlist/play` endpoint was also verified to accept `LIBARTIST-Tracks-*` containers for both Play All and Shuffle All, so no separate artist-play-all backend path is required.
+
+Current tested backend checkpoint:
+
+```text
+06edb34 — Add TIDAL track queue actions
+```
+
 ## Voice learning and ASR boundary
 
 Runtime voice learning lives in `~/.local/state/marantz-backend/voice-aliases.json`; it is state, not repository source.
 
 Earlier learning stored misheard aliases such as `chaos -> Kyuss`. Exact learned aliases still work, but canonical-name resolution was hardened so partial collisions do not rewrite genuine names: e.g. `Chaos UK` must not become Kyuss. Ambiguous canonical collisions fail closed.
 
-The important architectural direction is now to improve speech recognition with trusted canonical music vocabulary rather than accumulating hard-coded mistake substitutions such as `Kang = TANGK` or `guest horse = Gift Horse`.
+The important architectural direction is to improve speech recognition with trusted canonical music vocabulary rather than accumulating hard-coded mistake substitutions such as `Kang = TANGK` or `guest horse = Gift Horse`.
 
-The separate `marantz-voice` repository now builds a Whisper initial prompt from canonical artist names confirmed in the backend alias state while deliberately excluding the misheard alias strings. This changed a troublesome live IDLES test from repeated variants such as Adolph/Adels/idols to the correct transcription `Play IDLES`, followed by successful artist playback.
+The separate `marantz-voice` repository builds a Whisper initial prompt from canonical artist names confirmed in the backend alias state while deliberately excluding the misheard alias strings. This changed a troublesome live IDLES test from repeated variants such as Adolph/Adels/idols to the correct transcription `Play IDLES`, followed by successful artist playback.
 
 Do not undo the touchscreen confirmation/search workflow for genuinely uncertain new artists or titles. Safe matching or user confirmation remains required.
 
@@ -134,27 +191,28 @@ When voice development resumes, first compare identical phrases on the new micro
 
 The voice listener backend HTTP timeout is 20 seconds because valid TIDAL album operations can exceed the former 10-second client timeout even when playback succeeds.
 
-## Next independent phase: rich TIDAL browsing
+## Rich TIDAL browsing direction
 
 Rich/Roon-like TIDAL UI/backend work can continue while voice development is paused.
 
-Desired artist experience includes:
+The first functional artist-navigation phase is now proven: the Pi exposes Tracks, Albums, EP n Singles, Other Albums and Similar, and Artist -> Tracks has list-style playback/queue controls. Future work can improve presentation without discarding these proven semantics.
+
+Desired richer artist experience still includes:
 
 - artist artwork/header;
-- biography/info;
 - songs/popular tracks;
-- albums;
+- albums/EPs/singles;
 - similar/related artists;
+- available artist metadata such as popularity/external links where useful;
+- biography only if a reliable accessible source is established later;
 - room for additional metadata later.
 
-Before designing the UI, inspect the existing marantzPI TIDAL UI and backend/HEOS capabilities and establish exactly which metadata can be obtained reliably. Do not design around guessed API availability.
-
-Prefer a canonical artist data model keyed by TIDAL artist CID, capable of representing canonical name, artwork, biography, albums, tracks and similar artists. The existing show/browse semantic contract was intentionally created so future voice navigation can target these views without redesigning playback semantics.
+Prefer a canonical artist data model keyed by TIDAL artist CID. Do not design around guessed API availability. The existing show/browse semantic contract was intentionally created so future voice navigation can target these views without redesigning playback semantics.
 
 ## Development rules
 
 - Before editing, confirm branch, working tree, paths, ownership and service state. Never guess them.
-- The normal SSH client is Termius on Android; large multiline pastes are error-prone. Prefer safe GitHub-side edits and small sequential terminal commands for pull, syntax checks, service operations and hardware tests.
+- The normal SSH client is Termius on Android; large multiline pastes are error-prone. Prefer safe GitHub-side edits, guarded migration helpers, and small sequential terminal commands for pull, syntax checks, service operations and hardware tests.
 - After JavaScript changes run relevant `node --check`, regression tests and `git diff --check` where applicable before restarting the service.
 - State in advance when a test will physically change AVR power/source/volume/mute/playback. Prefer read-only tests when possible.
 - Do not patch individual benchmark sentences. Fix reusable language/behaviour classes.
