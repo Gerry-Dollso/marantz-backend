@@ -1035,6 +1035,108 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  if (req.method === 'GET' && req.url.startsWith('/api/tidal/track/action?')) {
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      const cid = String(url.searchParams.get('cid') || '').trim();
+      const mid = String(url.searchParams.get('mid') || '').trim();
+      const action = String(url.searchParams.get('action') || '').trim();
+
+      if (!cid || !mid) {
+        return sendJson(res, 400, { error: 'Missing cid or mid' });
+      }
+
+      const aidByAction = {
+        'play-now': 1,
+        'play-next': 2,
+        'add-end': 3,
+        'play-only': 4
+      };
+
+      if (action === 'play-from-here') {
+        const pageSize = 50;
+        const tracks = [];
+        let start = 0;
+        let total = null;
+
+        while (total === null || start < total) {
+          const response = await heosBrowse(
+            'heos://browse/browse?sid=10&cid=' + encodeURIComponent(cid) +
+            '&range=' + start + ',' + (start + pageSize - 1)
+          );
+          const payload = Array.isArray(response.payload)
+            ? response.payload
+            : [];
+          tracks.push(...payload.filter(
+            item => item.playable === 'yes' && item.mid
+          ));
+
+          const message = response.heos?.message || '';
+          const countMatch = message.match(/(?:^|&)count=(\d+)/);
+          if (countMatch) total = Number(countMatch[1]);
+          if (!payload.length) break;
+          start += payload.length;
+          if (total === null && payload.length < pageSize) break;
+        }
+
+        const startIndex = tracks.findIndex(
+          item => String(item.mid) === mid
+        );
+
+        if (startIndex < 0) {
+          return sendJson(res, 404, {
+            error: 'Selected track not found in container'
+          });
+        }
+
+        const remaining = tracks.slice(startIndex);
+
+        await heosBrowse(
+          'heos://browse/add_to_queue?pid=' + encodeURIComponent(PLAYER_ID) +
+          '&sid=10&cid=' + encodeURIComponent(cid) +
+          '&mid=' + encodeURIComponent(remaining[0].mid) +
+          '&aid=4'
+        );
+
+        for (const track of remaining.slice(1)) {
+          await heosBrowse(
+            'heos://browse/add_to_queue?pid=' + encodeURIComponent(PLAYER_ID) +
+            '&sid=10&cid=' + encodeURIComponent(cid) +
+            '&mid=' + encodeURIComponent(track.mid) +
+            '&aid=3'
+          );
+        }
+
+        return sendJson(res, 200, {
+          ok: true,
+          action,
+          queued: remaining.length,
+          selectedMid: mid
+        });
+      }
+
+      const aid = aidByAction[action];
+      if (!aid) {
+        return sendJson(res, 400, { error: 'Unknown track action' });
+      }
+
+      await heosBrowse(
+        'heos://browse/add_to_queue?pid=' + encodeURIComponent(PLAYER_ID) +
+        '&sid=10&cid=' + encodeURIComponent(cid) +
+        '&mid=' + encodeURIComponent(mid) +
+        '&aid=' + aid
+      );
+
+      return sendJson(res, 200, {
+        ok: true,
+        action,
+        selectedMid: mid
+      });
+    } catch (error) {
+      return sendJson(res, 500, { error: error.message });
+    }
+  }
+
   if (req.method === 'GET' && req.url.startsWith('/api/tidal/playlist/play?')) {
     try {
       const url = new URL(req.url, 'http://localhost');
