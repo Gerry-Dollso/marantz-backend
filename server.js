@@ -11,6 +11,9 @@ const {
 } = require('./voice-alias-store');
 const { classifyIntent } = require('./ai/intent-classifier');
 const { executeIntent } = require('./ai/intent-action-router');
+const {
+  createTidalLiveAdapter
+} = require('./ai/tidal-live-adapter');
 
 const AVR_HOST = '192.168.50.220';
 const AVR_PORT = 23;
@@ -512,6 +515,27 @@ const playTidalArtist = createTidalArtistVoiceControl({
   resolveLearnedArtist: artist => voiceAliases.getArtist(artist)
 });
 
+function setPendingTidalVoiceSearch(details) {
+  pendingTidalVoiceSearch = {
+    id: ++tidalVoiceSearchSequence,
+    ...details,
+    createdAt: Date.now()
+  };
+
+  return {
+    ok: false,
+    action: 'search-required',
+    ...pendingTidalVoiceSearch
+  };
+}
+
+const handleTidalSemanticCommand = createTidalLiveAdapter({
+  playArtist: playTidalArtist,
+  playTitle: (title, artist, requestedType) =>
+    playTidalAlbumByArtist(title, artist, requestedType),
+  setPendingSearch: setPendingTidalVoiceSearch
+});
+
 async function semanticCommandControl(command) {
   const text = String(command || '')
     .trim()
@@ -626,88 +650,10 @@ async function semanticCommandControl(command) {
     return semanticSourceControl(source);
   }
 
-  const tidalAlbumMatch = text.match(
-    /^(?:play|played) (?:the )?(?:album )?(.+?) by (.+)$/
-  );
+  const tidalSemantic = await handleTidalSemanticCommand(text);
 
-  if (tidalAlbumMatch) {
-    try {
-      return await playTidalAlbumByArtist(
-        tidalAlbumMatch[1],
-        tidalAlbumMatch[2]
-      );
-    } catch (error) {
-      const safeFailure =
-        /^TIDAL (?:artist|album|track|title) not found safely:/.test(
-          String(error.message || '')
-        );
-
-      if (!safeFailure) {
-        throw error;
-      }
-
-      const context =
-        error.tidalVoiceContext &&
-        typeof error.tidalVoiceContext === 'object'
-          ? error.tidalVoiceContext
-          : {};
-
-      pendingTidalVoiceSearch = {
-        id: ++tidalVoiceSearchSequence,
-        query: tidalAlbumMatch[2].trim(),
-        heard: text,
-        requestedTitle: tidalAlbumMatch[1].trim(),
-        type:
-          context.type ||
-          (/^TIDAL artist not found safely:/.test(
-            String(error.message || '')
-          )
-            ? 'artist'
-            : 'title'),
-        artist: context.artist || '',
-        artistCid: context.artistCid || '',
-        reason: error.message,
-        createdAt: Date.now()
-      };
-
-      return {
-        ok: false,
-        action: 'search-required',
-        ...pendingTidalVoiceSearch
-      };
-    }
-  }
-
-  const tidalArtistMatch = text.match(/^play (.+)$/);
-
-  if (tidalArtistMatch) {
-    try {
-      return await playTidalArtist(tidalArtistMatch[1]);
-    } catch (error) {
-      const safeFailure =
-        /^TIDAL artist not found safely:/.test(
-          String(error.message || '')
-        );
-
-      if (!safeFailure) {
-        throw error;
-      }
-
-      pendingTidalVoiceSearch = {
-        id: ++tidalVoiceSearchSequence,
-        query: tidalArtistMatch[1].trim(),
-        heard: text,
-        requestedTitle: '',
-        reason: error.message,
-        createdAt: Date.now()
-      };
-
-      return {
-        ok: false,
-        action: 'search-required',
-        ...pendingTidalVoiceSearch
-      };
-    }
+  if (tidalSemantic.handled) {
+    return tidalSemantic.result;
   }
 
   const transportPhrases = {
