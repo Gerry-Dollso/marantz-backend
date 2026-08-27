@@ -1193,6 +1193,93 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  if (req.method === 'GET' && req.url.startsWith('/api/tidal/tracks/play-all?')) {
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      const shuffle = url.searchParams.get('shuffle') === '1';
+      const cid = 'My Music-Tracks';
+      const cacheKey = cid + '|all';
+      const heosCid = encodeURIComponent(cid).replace(/%20/g, ' ');
+
+      const cachedResult = await tidalBrowseCache.get(
+        cacheKey,
+        async () => {
+          const pageSize = 50;
+          const allItems = [];
+          let start = 0;
+          let total = null;
+
+          while (total === null || start < total) {
+            const response = await heosBrowse(
+              'heos://browse/browse?sid=10&cid=' + heosCid +
+              '&range=' + start + ',' + (start + pageSize - 1)
+            );
+            const payload = Array.isArray(response.payload) ? response.payload : [];
+            allItems.push(...payload);
+            const message = response.heos?.message || '';
+            const countMatch = message.match(/(?:^|&)count=(\d+)/);
+            if (countMatch) total = Number(countMatch[1]);
+            if (!payload.length) break;
+            start += payload.length;
+            if (total === null && payload.length < pageSize) break;
+          }
+
+          return {
+            items: allItems.map(mapBrowseItem),
+            count: allItems.length
+          };
+        },
+        { refreshAfterMs: 15000, maxStaleMs: 12 * 60 * 60 * 1000 }
+      );
+
+      const tracks = (cachedResult.value.items || []).filter(
+        item => item.playable && item.mid
+      );
+      if (!tracks.length) {
+        throw new Error('Favourite Tracks contains no playable tracks');
+      }
+
+      const queueTracks = tracks.slice();
+      if (shuffle) {
+        for (let i = queueTracks.length - 1; i > 0; i -= 1) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [queueTracks[i], queueTracks[j]] = [queueTracks[j], queueTracks[i]];
+        }
+      }
+
+      await heosBrowse(
+        'heos://browse/add_to_queue?pid=' + encodeURIComponent(PLAYER_ID) +
+        '&sid=10&cid=' + heosCid +
+        '&mid=' + encodeURIComponent(queueTracks[0].mid) +
+        '&aid=4'
+      );
+
+      for (const track of queueTracks.slice(1)) {
+        await heosBrowse(
+          'heos://browse/add_to_queue?pid=' + encodeURIComponent(PLAYER_ID) +
+          '&sid=10&cid=' + heosCid +
+          '&mid=' + encodeURIComponent(track.mid) +
+          '&aid=3'
+        );
+      }
+
+      await heosBrowse(
+        'heos://player/set_play_mode?pid=' + encodeURIComponent(PLAYER_ID) +
+        '&shuffle=off'
+      );
+
+      return sendJson(res, 200, {
+        ok: true,
+        queued: queueTracks.length,
+        shuffle,
+        firstMid: String(queueTracks[0].mid),
+        sourceCached: cachedResult.cached
+      });
+    } catch (error) {
+      return sendJson(res, 500, { error: error.message });
+    }
+  }
+
   if (req.method === 'GET' && req.url.startsWith('/api/tidal/playlist/play?')) {
     try {
       const url = new URL(req.url, 'http://localhost');
