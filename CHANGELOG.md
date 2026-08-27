@@ -2,6 +2,58 @@
 
 This file records project-level milestones and known-good checkpoints. Git history remains the detailed source for individual code changes.
 
+## 2026-08-27 — TIDAL backend artist capability and queue actions
+
+- Applied the guarded TIDAL semantic integration to the live `server.js` and committed the resulting live state as:
+
+```text
+4f3ac1e — Apply live TIDAL semantic integration
+```
+
+- Preserved the backup `server.js.before-tidal-semantic-integration` created by the migration helper.
+- Probed the live HEOS/TIDAL artist structure using IDLES (`LIBARTIST-4653420`) before designing a richer artist UI.
+- Confirmed the native artist root exposes `Tracks`, `Albums`, `EP n Singles`, `Other Albums` and `Similar`.
+- Confirmed Similar Artists returns real `LIBARTIST-*` containers with artwork and can therefore support recursive artist navigation on the Pi.
+- Confirmed Artist -> Tracks returns playable song metadata including MID, artist, album ID and artwork.
+- Confirmed EP/single and Other Albums containers expose album containers and artwork.
+
+### Direct TIDAL OpenAPI findings
+
+- Verified server-to-server OAuth client-credentials token acquisition works for the configured TIDAL developer application.
+- Verified `/v2/artists/4653420?countryCode=GB&include=biography` returns the canonical artist name, popularity, external links and a biography relationship.
+- The artist response exposed social/official/TIDAL sharing links and identified the biography relationship as `artistBiographies` with ID `4653420`.
+- Biography content is not currently usable with this developer access: `include=biography` returned an empty `included` array and `/v2/artistBiographies/4653420?countryCode=GB` returned `404 Resource not found`.
+- Decision: treat biography text as unavailable for now. Do not design the artist UI around it or continue guessing undocumented/internal endpoints. Revisit only if a reliable accessible source is established later.
+
+### Generic TIDAL track queue actions
+
+Added and live-tested:
+
+```text
+GET /api/tidal/track/action?cid=<container>&mid=<track>&action=<action>
+```
+
+Supported behaviour:
+
+```text
+play-now       -> HEOS aid=1
+play-next      -> HEOS aid=2
+add-end        -> HEOS aid=3
+play-only      -> HEOS aid=4
+play-from-here -> replace queue at selected track and append every following track
+```
+
+- `play-from-here` paginates the full HEOS container rather than assuming one browse page, then slices from the selected MID and reconstructs the queue in order.
+- Live IDLES test starting at Dancer confirmed that Dancer played immediately and Next advanced to I'm Scum, proving correct Play From Here ordering.
+- Play Only, Play Now, Play Next and Add to End were also live-tested against the real HEOS player and matched expected queue semantics.
+- Verified the pre-existing `/api/tidal/playlist/play` route accepts `LIBARTIST-Tracks-*` containers for both normal Play All and Shuffle All, allowing the Pi to reuse one backend path for playlists and artist track lists.
+
+Current tested functional checkpoint:
+
+```text
+06edb34 — Add TIDAL track queue actions
+```
+
 ## 2026-08-27 — TIDAL semantic contract, canonical ASR learning and voice pause
 
 - Hardened learned artist handling so exact confirmed aliases still work while partial-name collisions do not rewrite genuine artist names. `Chaos UK`, for example, must not be rewritten through the learned `chaos -> Kyuss` alias. Ambiguous canonical collisions fail closed.
@@ -38,11 +90,13 @@ ai/test-tidal-title-type.js
 
 The suites confirm explicit album requests only resolve albums, explicit track requests only resolve tracks, legacy auto-title resolution remains available, future browse intents fail closed when no Pi UI handler exists, and unrelated receiver commands remain untouched.
 
-Added the guarded live adapter and migration, culminating in repository checkpoint:
+Added the guarded live adapter and migration, initially culminating in repository checkpoint:
 
 ```text
 064fd53 — Add guarded TIDAL semantic integration migration
 ```
+
+The migration result was subsequently applied live and committed as `4f3ac1e` as recorded above.
 
 Live verification showed:
 
