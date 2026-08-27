@@ -14,6 +14,9 @@ const { executeIntent } = require('./ai/intent-action-router');
 const {
   createTidalLiveAdapter
 } = require('./ai/tidal-live-adapter');
+const {
+  createTidalMetadataClient
+} = require('./tidal-metadata-client');
 
 const AVR_HOST = '192.168.50.220';
 const AVR_PORT = 23;
@@ -21,6 +24,7 @@ const HEOS_PORT = 1255;
 const PLAYER_ID = '48723103';
 const HTTP_PORT = 3100;
 const AI_FALLBACK_ENABLED = process.env.MARANTZ_AI_FALLBACK === '1';
+const tidalMetadata = createTidalMetadataClient({ countryCode: 'GB' });
 
 let pendingTidalVoiceSearch = null;
 let tidalVoiceSearchSequence = 0;
@@ -1032,6 +1036,21 @@ const server = http.createServer(async (req, res) => {
       });
     } catch (error) {
       return sendJson(res, 500, { error: error.message });
+    }
+  }
+
+  if (req.method === 'GET' && req.url.startsWith('/api/tidal/metadata/track-artists?')) {
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      const mid = String(url.searchParams.get('mid') || '').trim();
+      if (!mid) {
+        return sendJson(res, 400, { error: 'Missing track mid' });
+      }
+
+      const result = await tidalMetadata.getTrackArtists(mid);
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (error) {
+      return sendJson(res, 502, { error: error.message });
     }
   }
 
