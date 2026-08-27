@@ -2,6 +2,37 @@
 
 This file records project-level milestones and known-good checkpoints. Git history remains the detailed source for individual code changes.
 
+## 2026-08-27 — TIDAL canonical metadata service for Pi navigation
+
+- Added a protected production credential path for the MarantzPi TIDAL developer application. The live systemd service loads `/etc/marantz-backend/tidal.env`; credentials remain outside Git and are exposed to Node only through `TIDAL_CLIENT_ID` and `TIDAL_CLIENT_SECRET` environment variables.
+- Verified client-credentials OAuth from the live HP service environment. Tokens currently expire after 14,400 seconds.
+- Added isolated `tidal-metadata-client.js` rather than embedding OAuth/token logic directly in `server.js`.
+- The metadata client caches the bearer token in memory, refreshes shortly before expiry, and retries once after a 401 by reacquiring a token.
+- Added the read-only endpoint:
+
+```text
+GET /api/tidal/metadata/track-artists?mid=<TIDAL track id>
+```
+
+- The endpoint validates the MID, calls official TIDAL OpenAPI `/v2/tracks/{id}?countryCode=GB&include=artists`, and returns canonical artist IDs/CIDs/names without exposing credentials or tokens.
+- Live Magazine test proved track MID `1349014` (`Because You're Frightened`) resolves canonically to artist ID `64520` / `LIBARTIST-64520` / `Magazine`.
+- This eliminated the unsafe fallback idea of taking the first exact-name HEOS/TIDAL search result; live search demonstrated that multiple distinct TIDAL artists can share the visible name `Magazine`.
+- The Pi now consumes this endpoint for Now Playing artist-name navigation while playback continues untouched.
+
+Checkpoint sequence:
+
+```text
+b8b703d — cached TIDAL metadata client
+11d616f — guarded TIDAL metadata endpoint migration
+ebb4b65 — Add TIDAL track artist metadata endpoint
+```
+
+Current tested backend checkpoint:
+
+```text
+ebb4b65 — Add TIDAL track artist metadata endpoint
+```
+
 ## 2026-08-27 — TIDAL backend artist capability and queue actions
 
 - Applied the guarded TIDAL semantic integration to the live `server.js` and committed the resulting live state as:
@@ -48,7 +79,7 @@ play-from-here -> replace queue at selected track and append every following tra
 - Play Only, Play Now, Play Next and Add to End were also live-tested against the real HEOS player and matched expected queue semantics.
 - Verified the pre-existing `/api/tidal/playlist/play` route accepts `LIBARTIST-Tracks-*` containers for both normal Play All and Shuffle All, allowing the Pi to reuse one backend path for playlists and artist track lists.
 
-Current tested functional checkpoint:
+Queue-action checkpoint:
 
 ```text
 06edb34 — Add TIDAL track queue actions
