@@ -15,18 +15,6 @@ function parseTidalSemanticRequest(command) {
 
   let match;
 
-  match = lower.match(/^(?:show me|show|open|go to|take me to) (?:the )?(?:artist )?(.+)$/);
-  if (match) {
-    return {
-      action: 'show',
-      entity: 'artist',
-      view: 'overview',
-      artist: text.slice(text.length - match[1].length),
-      album: '',
-      track: ''
-    };
-  }
-
   match = lower.match(/^(?:show me|show|open) (?:the )?(?:albums|records) (?:by|from) (.+)$/);
   if (match) {
     return {
@@ -69,6 +57,18 @@ function parseTidalSemanticRequest(command) {
       action: 'show',
       entity: 'artist',
       view: 'info',
+      artist: text.slice(text.length - match[1].length),
+      album: '',
+      track: ''
+    };
+  }
+
+  match = lower.match(/^(?:show me|show|open|go to|take me to) (?:the )?(?:artist )?(.+)$/);
+  if (match) {
+    return {
+      action: 'show',
+      entity: 'artist',
+      view: 'overview',
       artist: text.slice(text.length - match[1].length),
       album: '',
       track: ''
