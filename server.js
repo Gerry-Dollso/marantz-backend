@@ -17,6 +17,9 @@ const {
 const {
   createTidalMetadataClient
 } = require('./tidal-metadata-client');
+const {
+  createTidalBrowseCache
+} = require('./tidal-browse-cache');
 
 const AVR_HOST = '192.168.50.220';
 const AVR_PORT = 23;
@@ -25,6 +28,7 @@ const PLAYER_ID = '48723103';
 const HTTP_PORT = 3100;
 const AI_FALLBACK_ENABLED = process.env.MARANTZ_AI_FALLBACK === '1';
 const tidalMetadata = createTidalMetadataClient({ countryCode: 'GB' });
+const tidalBrowseCache = createTidalBrowseCache({ maxEntries: 64 });
 
 let pendingTidalVoiceSearch = null;
 let tidalVoiceSearchSequence = 0;
@@ -869,48 +873,81 @@ const server = http.createServer(async (req, res) => {
       const cid = url.searchParams.get('cid');
       if (!cid || !cid.trim()) return sendJson(res, 400, { error: 'Missing cid' });
 
-      const heosCid = encodeURIComponent(cid.trim()).replace(/%20/g, ' ');
-      if (url.searchParams.has('start') || url.searchParams.has('limit')) {
-        const pageStart = Math.max(0, Number(url.searchParams.get('start')) || 0);
-        const pageLimit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 50));
-        const pageEnd = pageStart + pageLimit - 1;
-        const response = await heosBrowse(
-          'heos://browse/browse?sid=10&cid=' + heosCid + '&range=' + pageStart + ',' + pageEnd
-        );
-        const message = response.heos?.message || '';
-        const countMatch = message.match(/(?:^|&)count=(\d+)/);
-        const total = countMatch ? Number(countMatch[1]) : null;
-        return sendJson(res, 200, {
-          ok: true,
-          items: (response.payload || []).map(mapBrowseItem),
-          count: total,
-          start: pageStart,
-          limit: pageLimit
-        });
-      }
+      const cleanCid = cid.trim();
+      const heosCid = encodeURIComponent(cleanCid).replace(/%20/g, ' ');
+      const hasPage = url.searchParams.has('start') || url.searchParams.has('limit');
+      const pageStart = hasPage
+        ? Math.max(0, Number(url.searchParams.get('start')) || 0)
+        : null;
+      const pageLimit = hasPage
+        ? Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 50))
+        : null;
+      const cacheKey = hasPage
+        ? cleanCid + '|page|' + pageStart + '|' + pageLimit
+        : cleanCid + '|all';
 
-      const pageSize = 50;
-      const allItems = [];
-      let start = 0;
-      let total = null;
-      while (total === null || start < total) {
-        const response = await heosBrowse(
-          'heos://browse/browse?sid=10&cid=' + heosCid + '&range=' + start + ',' + (start + pageSize - 1)
-        );
-        const payload = Array.isArray(response.payload) ? response.payload : [];
-        allItems.push(...payload);
-        const message = response.heos?.message || '';
-        const countMatch = message.match(/(?:^|&)count=(\d+)/);
-        if (countMatch) total = Number(countMatch[1]);
-        if (!payload.length) break;
-        start += payload.length;
-        if (total === null && payload.length < pageSize) break;
-      }
+      const highValueLibrary = new Set([
+        'My Music',
+        'My Music-Artists',
+        'My Music-Albums',
+        'My Music-Tracks',
+        'My Music-Playlists'
+      ]).has(cleanCid);
+      const policy = highValueLibrary
+        ? { refreshAfterMs: 15000, maxStaleMs: 12 * 60 * 60 * 1000 }
+        : { refreshAfterMs: 2 * 60 * 1000, maxStaleMs: 2 * 60 * 60 * 1000 };
 
+      const loader = async () => {
+        if (hasPage) {
+          const pageEnd = pageStart + pageLimit - 1;
+          const response = await heosBrowse(
+            'heos://browse/browse?sid=10&cid=' + heosCid + '&range=' + pageStart + ',' + pageEnd
+          );
+          const message = response.heos?.message || '';
+          const countMatch = message.match(/(?:^|&)count=(\d+)/);
+          const total = countMatch ? Number(countMatch[1]) : null;
+          return {
+            items: (response.payload || []).map(mapBrowseItem),
+            count: total,
+            start: pageStart,
+            limit: pageLimit
+          };
+        }
+
+        const pageSize = 50;
+        const allItems = [];
+        let browseStart = 0;
+        let total = null;
+        while (total === null || browseStart < total) {
+          const response = await heosBrowse(
+            'heos://browse/browse?sid=10&cid=' + heosCid + '&range=' + browseStart + ',' + (browseStart + pageSize - 1)
+          );
+          const payload = Array.isArray(response.payload) ? response.payload : [];
+          allItems.push(...payload);
+          const message = response.heos?.message || '';
+          const countMatch = message.match(/(?:^|&)count=(\d+)/);
+          if (countMatch) total = Number(countMatch[1]);
+          if (!payload.length) break;
+          browseStart += payload.length;
+          if (total === null && payload.length < pageSize) break;
+        }
+
+        return {
+          items: allItems.map(mapBrowseItem),
+          count: allItems.length
+        };
+      };
+
+      const cachedResult = await tidalBrowseCache.get(cacheKey, loader, policy);
       return sendJson(res, 200, {
         ok: true,
-        items: allItems.map(mapBrowseItem),
-        count: allItems.length
+        ...cachedResult.value,
+        cached: cachedResult.cached,
+        cacheAgeMs: cachedResult.cacheAgeMs,
+        refreshing: cachedResult.refreshing,
+        ...(cachedResult.refreshError
+          ? { cacheRefreshError: cachedResult.refreshError }
+          : {})
       });
     } catch (error) {
       return sendJson(res, 500, { error: error.message });
