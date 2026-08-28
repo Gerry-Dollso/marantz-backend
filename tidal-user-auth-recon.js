@@ -357,7 +357,7 @@ function createTidalUserAuthRecon(options = {}) {
       '/playlists/' + encodeURIComponent(id) + '/relationships/items' +
       '?countryCode=' + encodeURIComponent(countryCode) +
       '&page%5Bcursor%5D=' + encodeURIComponent(pageCursor) +
-      '&include=' + encodeURIComponent('items')
+      '&include=' + encodeURIComponent('items,items.tracks:artists,items.tracks:albums.coverArt')
     );
   }
 
