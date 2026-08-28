@@ -6,7 +6,7 @@ const AUTHORIZE_URL = 'https://login.tidal.com/authorize';
 const TOKEN_URL = 'https://auth.tidal.com/v1/oauth2/token';
 const API_BASE = 'https://openapi.tidal.com/v2';
 const DEFAULT_REDIRECT_URI = 'http://192.168.50.145:3100/api/tidal/oauth/callback';
-const DEFAULT_SCOPES = ['recommendations.read', 'user.read', 'collection.read'];
+const DEFAULT_SCOPES = ['recommendations.read', 'user.read', 'collection.read', 'search.read'];
 const PENDING_AUTH_TTL_MS = 10 * 60 * 1000;
 
 function base64Url(buffer) {
@@ -464,6 +464,92 @@ function createTidalUserAuthRecon(options = {}) {
     };
   }
 
+  async function probeSearch() {
+    if (!session?.accessToken) {
+      throw new Error('TIDAL user authorization has not been completed');
+    }
+    if (Date.now() >= session.expiresAt) {
+      throw new Error('TIDAL user access token has expired; authorize again');
+    }
+
+    async function inspectSearch(label, path) {
+      const startedAt = process.hrtime.bigint();
+      const response = await fetch(API_BASE + path, {
+        headers: {
+          Authorization: 'Bearer ' + session.accessToken,
+          Accept: 'application/vnd.api+json'
+        }
+      });
+      const payload = await response.json().catch(() => ({}));
+      const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+      if (!response.ok) {
+        const detail = payload?.errors?.[0]?.detail || payload?.detail || ('HTTP ' + response.status);
+        return {
+          ok: false,
+          httpStatus: response.status,
+          elapsedMs: Math.round(elapsedMs * 10) / 10,
+          error: detail
+        };
+      }
+
+      const data = Array.isArray(payload?.data) ? payload.data : (payload?.data ? [payload.data] : []);
+      const included = Array.isArray(payload?.included) ? payload.included : [];
+      const simplify = item => ({
+        id: String(item?.id || ''),
+        type: String(item?.type || ''),
+        name: String(item?.attributes?.name || item?.attributes?.title || ''),
+        attributeKeys: Object.keys(item?.attributes || {}),
+        relationshipKeys: Object.keys(item?.relationships || {})
+      });
+
+      return {
+        ok: true,
+        httpStatus: response.status,
+        elapsedMs: Math.round(elapsedMs * 10) / 10,
+        dataCount: data.length,
+        data: data.slice(0, 20).map(simplify),
+        includedCount: included.length,
+        included: included.slice(0, 40).map(simplify),
+        includedTypes: [...new Set(included.map(item => String(item?.type || '')).filter(Boolean))],
+        links: payload?.links || null,
+        meta: payload?.meta || null
+      };
+    }
+
+    const encodedCountry = encodeURIComponent(countryCode);
+    async function runQuery(query) {
+      const encodedQuery = encodeURIComponent(query);
+      const base = '/searchResults/' + encodedQuery + '/relationships/';
+      return {
+        artists: await inspectSearch(
+          'artists',
+          base + 'artists?countryCode=' + encodedCountry + '&include=artists.profileArt'
+        ),
+        albums: await inspectSearch(
+          'albums',
+          base + 'albums?countryCode=' + encodedCountry + '&include=albums.coverArt,albums.artists'
+        ),
+        tracks: await inspectSearch(
+          'tracks',
+          base + 'tracks?countryCode=' + encodedCountry + '&include=tracks.artists,tracks.albums,tracks.albums.coverArt'
+        ),
+        topHits: await inspectSearch(
+          'topHits',
+          base + 'topHits?countryCode=' + encodedCountry + '&include=topHits'
+        ),
+        suggestions: await inspectSearch(
+          'suggestions',
+          '/searchSuggestions/' + encodedQuery + '/relationships/directHits?countryCode=' + encodedCountry + '&include=directHits'
+        )
+      };
+    }
+
+    return {
+      interpol: await runQuery('Interpol'),
+      documentedControl: await runQuery('hello')
+    };
+  }
+
   async function handle(req, res) {
     const requestUrl = new URL(req.url, 'http://localhost');
 
@@ -569,6 +655,15 @@ function createTidalUserAuthRecon(options = {}) {
         tokenScope: session?.scope || '',
         refreshTokenReceived: Boolean(session?.refreshToken)
       });
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe-search') {
+      try {
+        const search = await probeSearch();
+        return sendJson(res, 200, { ok: true, search });
+      } catch (error) {
+        return sendJson(res, 401, { ok: false, error: error.message });
+      }
     }
 
     if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe-rich-metadata') {
