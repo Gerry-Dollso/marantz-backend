@@ -106,6 +106,11 @@ function createTidalUserAuthRecon(options = {}) {
   let pendingAuth = null;
   let session = null;
   let refreshInFlight = null;
+  const personalisedRecommendationsCache = { value: null, expiresAt: 0 };
+  const personalisedPlaylistCache = new Map();
+  const PERSONALISED_RECOMMENDATIONS_TTL_MS = 5 * 60 * 1000;
+  const PERSONALISED_PLAYLIST_TTL_MS = 5 * 60 * 1000;
+  const PERSONALISED_PLAYLIST_MAX_PAGES = 10;
   const refreshTokenFile = String(
     options.refreshTokenFile || process.env.TIDAL_REFRESH_TOKEN_FILE || DEFAULT_REFRESH_TOKEN_FILE
   ).trim();
@@ -359,6 +364,192 @@ function createTidalUserAuthRecon(options = {}) {
       '&page%5Bcursor%5D=' + encodeURIComponent(pageCursor) +
       '&include=' + encodeURIComponent('items,items.tracks:artists,items.tracks:albums.coverArt')
     );
+  }
+
+  function resourceKey(resource) {
+    return String(resource?.type || '') + ':' + String(resource?.id || '');
+  }
+
+  function buildResourceMap(resources) {
+    const map = new Map();
+    for (const resource of resources || []) {
+      if (!resource?.type || !resource?.id) continue;
+      map.set(resourceKey(resource), resource);
+    }
+    return map;
+  }
+
+  function relationshipItems(relationship) {
+    const data = relationship?.data;
+    if (Array.isArray(data)) return data;
+    return data ? [data] : [];
+  }
+
+  function pickArtworkHref(artwork) {
+    const files = Array.isArray(artwork?.attributes?.files)
+      ? artwork.attributes.files.filter(file => file?.href)
+      : [];
+    if (!files.length) return null;
+    const exact = files.find(file => Number(file?.meta?.width) === 320);
+    if (exact) return String(exact.href);
+    const sorted = files.slice().sort((a, b) => {
+      const aw = Number(a?.meta?.width) || Number.MAX_SAFE_INTEGER;
+      const bw = Number(b?.meta?.width) || Number.MAX_SAFE_INTEGER;
+      return Math.abs(aw - 320) - Math.abs(bw - 320);
+    });
+    return String(sorted[0].href);
+  }
+
+  function compactTrack(linkage, resources) {
+    if (!linkage || linkage.type !== 'tracks') return null;
+    const track = resources.get(resourceKey(linkage));
+    if (!track) return null;
+
+    const artistLink = relationshipItems(track.relationships?.artists)[0] || null;
+    const albumLink = relationshipItems(track.relationships?.albums)[0] || null;
+    const artist = artistLink ? resources.get(resourceKey(artistLink)) : null;
+    const album = albumLink ? resources.get(resourceKey(albumLink)) : null;
+    const artworkLink = relationshipItems(album?.relationships?.coverArt)[0] || null;
+    const artwork = artworkLink ? resources.get(resourceKey(artworkLink)) : null;
+
+    return {
+      id: String(track.id),
+      title: String(track.attributes?.title || ''),
+      artist: String(artist?.attributes?.name || ''),
+      artistId: artist?.id ? String(artist.id) : null,
+      album: String(album?.attributes?.title || ''),
+      albumId: album?.id ? String(album.id) : null,
+      duration: track.attributes?.duration || null,
+      explicit: Boolean(track.attributes?.explicit),
+      isrc: track.attributes?.isrc ? String(track.attributes.isrc) : null,
+      artwork: pickArtworkHref(artwork)
+    };
+  }
+
+  function playlistName(resource) {
+    return String(
+      resource?.attributes?.name ||
+      resource?.attributes?.title ||
+      resource?.attributes?.mixName ||
+      ''
+    );
+  }
+
+  async function getPersonalisedRecommendations() {
+    if (personalisedRecommendationsCache.value && Date.now() < personalisedRecommendationsCache.expiresAt) {
+      return { ...personalisedRecommendationsCache.value, cached: true };
+    }
+
+    const raw = await probeRawRecommendations();
+    const playlists = [];
+    const seen = new Set();
+
+    const add = (kind, resource) => {
+      if (!resource || resource.type !== 'playlists' || !resource.id) return;
+      const id = String(resource.id);
+      if (seen.has(id)) return;
+      seen.add(id);
+      playlists.push({ id, name: playlistName(resource), kind });
+    };
+
+    const dailyMixResources = (raw.dailyMixes?.included || [])
+      .filter(resource => resource?.type === 'playlists');
+    dailyMixResources.sort((a, b) => {
+      const an = Number((playlistName(a).match(/My Mix (\d+)/i) || [])[1]) || 999;
+      const bn = Number((playlistName(b).match(/My Mix (\d+)/i) || [])[1]) || 999;
+      return an - bn;
+    });
+    for (const resource of dailyMixResources) add('mix', resource);
+
+    for (const resource of raw.dailyDiscovery?.included || []) {
+      if (resource?.type === 'playlists') add('daily-discovery', resource);
+    }
+    for (const resource of raw.newArrivals?.included || []) {
+      if (resource?.type === 'playlists') add('new-arrivals', resource);
+    }
+
+    const value = { playlists };
+    personalisedRecommendationsCache.value = value;
+    personalisedRecommendationsCache.expiresAt = Date.now() + PERSONALISED_RECOMMENDATIONS_TTL_MS;
+    return { ...value, cached: false };
+  }
+
+  async function getPersonalisedPlaylist(playlistId) {
+    const id = String(playlistId || '').trim();
+    if (!/^[a-zA-Z0-9]+$/.test(id)) {
+      throw new Error('Playlist id must be alphanumeric');
+    }
+
+    const cached = personalisedPlaylistCache.get(id);
+    if (cached && Date.now() < cached.expiresAt) {
+      return { ...cached.value, cached: true };
+    }
+
+    const include = 'items,items.tracks:artists,items.tracks:albums.coverArt';
+    const first = await apiGetRaw(
+      '/playlists/' + encodeURIComponent(id) +
+      '?include=' + encodeURIComponent(include) +
+      '&countryCode=' + encodeURIComponent(countryCode)
+    );
+
+    const root = first?.data && !Array.isArray(first.data) ? first.data : null;
+    if (!root || root.type !== 'playlists') {
+      throw new Error('TIDAL playlist response did not contain a playlist resource');
+    }
+
+    const linkages = relationshipItems(root.relationships?.items).slice();
+    const included = Array.isArray(first.included) ? first.included.slice() : [];
+    let next = root.relationships?.items?.links?.next || first?.links?.next || null;
+    const seenNext = new Set();
+    let pages = 1;
+
+    while (next) {
+      if (pages >= PERSONALISED_PLAYLIST_MAX_PAGES) {
+        throw new Error('TIDAL playlist pagination safety limit reached');
+      }
+      const nextUrl = new URL(String(next), API_BASE);
+      const cursor = String(nextUrl.searchParams.get('page[cursor]') || '').trim();
+      if (!cursor || !/^[a-zA-Z0-9_-]+$/.test(cursor)) {
+        throw new Error('TIDAL playlist next link did not contain a supported cursor');
+      }
+      if (seenNext.has(cursor)) {
+        throw new Error('TIDAL playlist pagination repeated a cursor');
+      }
+      seenNext.add(cursor);
+
+      const page = await apiGetRaw(
+        '/playlists/' + encodeURIComponent(id) + '/relationships/items' +
+        '?countryCode=' + encodeURIComponent(countryCode) +
+        '&page%5Bcursor%5D=' + encodeURIComponent(cursor) +
+        '&include=' + encodeURIComponent(include)
+      );
+      if (Array.isArray(page?.data)) linkages.push(...page.data);
+      if (Array.isArray(page?.included)) included.push(...page.included);
+      next = page?.links?.next || null;
+      pages += 1;
+    }
+
+    const resources = buildResourceMap(included);
+    const tracks = linkages.map(linkage => compactTrack(linkage, resources)).filter(Boolean);
+    const value = {
+      playlist: {
+        id: String(root.id),
+        name: playlistName(root),
+        trackCount: tracks.length
+      },
+      tracks,
+      pages
+    };
+
+    personalisedPlaylistCache.set(id, {
+      value,
+      expiresAt: Date.now() + PERSONALISED_PLAYLIST_TTL_MS
+    });
+    if (personalisedPlaylistCache.size > 16) {
+      const oldestKey = personalisedPlaylistCache.keys().next().value;
+      personalisedPlaylistCache.delete(oldestKey);
+    }
+    return { ...value, cached: false };
   }
 
   async function probeRecommendations() {
@@ -969,6 +1160,25 @@ async function probeSearch() {
         return sendJson(res, 200, { ok: true, collections });
       } catch (error) {
         return sendJson(res, 401, { ok: false, error: error.message });
+      }
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/personalised') {
+      try {
+        const personalised = await getPersonalisedRecommendations();
+        return sendJson(res, 200, { ok: true, ...personalised });
+      } catch (error) {
+        return sendJson(res, 500, { ok: false, error: error.message });
+      }
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/personalised/playlist') {
+      try {
+        const playlistId = requestUrl.searchParams.get('id') || '';
+        const playlist = await getPersonalisedPlaylist(playlistId);
+        return sendJson(res, 200, { ok: true, ...playlist });
+      } catch (error) {
+        return sendJson(res, 400, { ok: false, error: error.message });
       }
     }
 
