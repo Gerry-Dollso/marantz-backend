@@ -11,12 +11,17 @@ This file records project-level milestones and known-good checkpoints. Git histo
 - Most successful collection page fetches were roughly 120-160 ms excluding deliberate one-second pacing, supporting an API-first browse/cache design.
 - Proved rich artist profile art, album cover art/artist relationships and nested track -> artist/album/cover-art metadata.
 - Added `search.read` and tested official search root/relationship forms with both Interpol and a documented control query. The current developer app consistently receives `400 Invalid resource ID`; one rapid burst also received a 429. Search is therefore recorded as access-blocked/unavailable for this app rather than treated as a backend implementation success. `search.write` remains disabled because no search mutation is required.
-- Current architecture direction: official TIDAL API for browsing/discovery/metadata, HEOS/SR8015 for playback. The remaining critical proof is whether an official-API numeric track ID can be handed to the existing HEOS playback path; this has not yet been tested and must not be assumed.
+- Current architecture direction is now proven end-to-end: official TIDAL API for browsing/discovery/metadata, HEOS/SR8015 for playback. The bridge requires metadata-based HEOS catalogue resolution rather than direct numeric-ID translation.
+- Live Daily Discovery proof used Phantogram - When I'm Small. Official API returned track `111442201`, album `111442199` (Eyelid Movies), artist `3614038`. HEOS independently returned artist `LIBARTIST-3614038`, but its matching Eyelid Movies release was `LIBALBUM-111438012` and the matching track MID was `111438014`.
+- Constructing `LIBALBUM-111442199` directly from the API album ID returned an empty HEOS container, so API album/track IDs must not be assumed to equal HEOS IDs.
+- Following the real HEOS artist -> Albums hierarchy found the matching release and title. `browse/add_to_queue` with the HEOS-returned CID/MID succeeded with `aid=3`; queue inspection confirmed When I'm Small at qid 51. A subsequent `aid=1` test successfully started the track on the SR8015.
+- Production rule: resolve official API metadata into a real HEOS catalogue context, then use HEOS-returned CID + MID for queue/playback. Numeric identity can coincide (the Phantogram artist ID did) but must be treated as an optimization/verification signal, not as a universal mapping.
 
-Runtime search-recon checkpoint:
+Runtime reconnaissance checkpoints:
 
 ```text
 050da79 — Add TIDAL search reconnaissance
+153bc83 — Add parameterized TIDAL track metadata probe
 ```
 
 ## 2026-08-28 — TIDAL Favourite Tracks lifecycle cancellation

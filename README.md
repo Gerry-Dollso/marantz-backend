@@ -279,7 +279,39 @@ Search checkpoint:
 050da79 — Add TIDAL search reconnaissance
 ```
 
-Important boundary: official API numeric track IDs have **not yet been proven to interoperate with HEOS playback**. Do not claim the hybrid architecture is playback-complete until a controlled API-ID -> HEOS test succeeds. Such a test changes current playback and must be announced before execution.
+### Official API -> HEOS playback bridge — proven live
+
+The end-to-end bridge from an official personalized recommendation to real SR8015 playback is now proven, but **numeric API IDs must not be assumed to equal HEOS catalogue IDs**.
+
+Live Daily Discovery proof used Phantogram - `When I'm Small`:
+
+```text
+Official API track id: 111442201
+Official API album id: 111442199 (Eyelid Movies)
+Official API artist id: 3614038 (Phantogram)
+
+HEOS artist cid: LIBARTIST-3614038
+HEOS album cid:  LIBALBUM-111438012 (Eyelid Movies)
+HEOS track mid:   111438014 (When I'm Small)
+```
+
+A direct constructed browse of `LIBALBUM-111442199` returned an empty container, proving that official album IDs cannot be blindly converted to HEOS album CIDs. Following the real HEOS artist hierarchy instead found `LIBALBUM-111438012`; browsing that container exposed the matching title with MID `111438014`.
+
+The resolved HEOS context was then tested with `browse/add_to_queue`: `aid=3` successfully appended the track and queue inspection confirmed Phantogram - When I'm Small at qid 51; `aid=1` then successfully started playback on the SR8015.
+
+Production bridge rule: use official API metadata for discovery, then resolve into a real HEOS catalogue context by metadata/relationships and use the HEOS-returned CID + MID for playback. Artist IDs may coincide across APIs (Phantogram did), but this is not a safe universal assumption; album and track IDs demonstrably differed for this release.
+
+Parameterized reconnaissance endpoint used for this proof:
+
+```text
+GET /api/tidal/oauth/probe-track?id=<numeric-track-id>
+```
+
+Runtime checkpoint:
+
+```text
+153bc83 — Add parameterized TIDAL track metadata probe
+```
 
 ## Rich TIDAL browsing direction
 
