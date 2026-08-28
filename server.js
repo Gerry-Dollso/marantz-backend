@@ -1247,20 +1247,38 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
-      await heosBrowse(
-        'heos://browse/add_to_queue?pid=' + encodeURIComponent(PLAYER_ID) +
-        '&sid=10&cid=' + heosCid +
-        '&mid=' + encodeURIComponent(queueTracks[0].mid) +
-        '&aid=4'
-      );
+      let queuedCount = 0;
+      let skippedCount = 0;
+      let firstMid = '';
 
-      for (const track of queueTracks.slice(1)) {
-        await heosBrowse(
-          'heos://browse/add_to_queue?pid=' + encodeURIComponent(PLAYER_ID) +
-          '&sid=10&cid=' + heosCid +
-          '&mid=' + encodeURIComponent(track.mid) +
-          '&aid=3'
-        );
+      for (const track of queueTracks) {
+        const aid = queuedCount === 0 ? 4 : 3;
+        try {
+          await heosBrowse(
+            'heos://browse/add_to_queue?pid=' + encodeURIComponent(PLAYER_ID) +
+            '&sid=10&cid=' + heosCid +
+            '&mid=' + encodeURIComponent(track.mid) +
+            '&aid=' + aid,
+            15000
+          );
+          if (queuedCount === 0) firstMid = String(track.mid);
+          queuedCount += 1;
+        } catch (error) {
+          skippedCount += 1;
+          console.warn(
+            'TIDAL FAVOURITE TRACK SKIP:',
+            JSON.stringify({
+              mid: String(track.mid || ''),
+              name: String(track.name || ''),
+              artist: String(track.artist || ''),
+              error: error.message
+            })
+          );
+        }
+      }
+
+      if (!queuedCount) {
+        throw new Error('No Favourite Tracks could be queued');
       }
 
       await heosBrowse(
@@ -1270,9 +1288,11 @@ const server = http.createServer(async (req, res) => {
 
       return sendJson(res, 200, {
         ok: true,
-        queued: queueTracks.length,
+        queued: queuedCount,
+        skipped: skippedCount,
+        attempted: queueTracks.length,
         shuffle,
-        firstMid: String(queueTracks[0].mid),
+        firstMid,
         sourceCached: cachedResult.cached
       });
     } catch (error) {
