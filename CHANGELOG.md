@@ -2,9 +2,42 @@
 
 This file records project-level milestones and known-good checkpoints. Git history remains the detailed source for individual code changes.
 
+## 2026-08-28 — Persistent TIDAL user authorization and deterministic HEOS resolution
+
+- Added persistent TIDAL user OAuth refresh-token authorization for the official user-scoped API. Access tokens remain short-lived in memory; the refresh token is stored outside Git in `/etc/marantz-backend/tidal-refresh-token` with owner `gerry:gerry` and mode `0600`.
+- The backend can now restore a user session after restart by exchanging the persisted refresh token, and the `/api/tidal/oauth/status` response reports whether a refresh token is stored without exposing the token itself.
+- Added a read-only recommendation-resolution batch probe over 26 tracks drawn from My Mix 1, My Daily Discovery and My New Arrivals.
+- Added the read-only `ai/probe-tidal-heos-resolution.js` reconnaissance tool to resolve official recommendation metadata into playable HEOS context.
+- The first metadata-only resolver pass achieved 18/26 resolved, 2 ambiguous and 6 unresolved. Follow-up deterministic identity checks improved this to **23/26 resolved, 1 ambiguous, 2 unresolved, 0 errors**.
+- The key finding is stronger than the earlier Phantogram example: for the tested catalogue entries, the official TIDAL track ID itself is directly usable as the HEOS track `mid`, while album and artist context can still differ between the two catalogue views.
+- 21 of the 23 resolved tracks were confirmed as `direct-album-id+official-mid`; Ladytron and the other edge cases established that an exact official MID can disambiguate duplicate title matches inside a HEOS album container.
+- `A Daisy Chain 4 Satan (Acid & Flowers Mix)` required only transport-name normalization: HEOS returned `Acid %26 Flowers Mix`, but the official track ID `113779406` matched the playable HEOS MID exactly.
+- `Who Are You` on `Black Boy (Alternative)` resolved despite official metadata crediting Vince Staples while the HEOS track list credits Dahi, because the official track ID `536071631` matched the HEOS MID exactly.
+- `That's Law` resolved despite the official artist being Frankie Pulitzer and the HEOS track credit being CZARFACE, because the official track ID `536793606` matched the HEOS MID exactly. Frankie Pulitzer is a collaborator on the release, not the HEOS primary artist credit.
+- `Destroy Everything You Touch` resolved deterministically by choosing the HEOS candidate whose MID equals official track ID `214191276`.
+- `Screen Shot` by Swans resolved through artist -> album -> track traversal where direct constructed album lookup was insufficient.
+- Current remaining edge cases are The Sugarcubes `Birthday`, where two distinct HEOS albums both contain a track with the same title, and two unresolved catalogue/context cases from Public Image Ltd. and 16 Horsepower. These remain intentionally unresolved rather than guessed.
+- Current architecture rule: official TIDAL metadata supplies canonical discovery identity; HEOS remains the playback transport. Prefer exact numeric identity when a proven HEOS context exposes a MID equal to the official track ID. Do not assume that arbitrary TIDAL artist or album IDs can be constructed into HEOS CIDs.
+- Next investigation is reverse lookup from a playable HEOS MID/context toward canonical TIDAL metadata, while preserving read-only reconnaissance and not guessing undocumented cross-service mappings.
+
+Current tested backend checkpoint:
+
+```text
+2ce9132 — Use deterministic TIDAL IDs in HEOS resolver probe
+```
+
+Checkpoint sequence:
+
+```text
+0a7776c — Add persistent TIDAL auth and paced recommendation probe
+e2b45dd — Add read-only TIDAL HEOS resolution probe
+a616299 — Refine read-only TIDAL HEOS resolution probe
+2ce9132 — Use deterministic TIDAL IDs in HEOS resolver probe
+```
+
 ## 2026-08-28 — Official TIDAL API reconnaissance
 
-- Proved temporary user OAuth Authorization Code + PKCE with read-only recommendation, user, collection and search scopes. Tokens remain RAM-only for reconnaissance.
+- Proved user OAuth Authorization Code + PKCE with read-only recommendation, user, collection and search scopes. The later persistent-auth checkpoint stores only the refresh token outside Git; no token is committed to repository source.
 - Proved My Mix 1-8, My Daily Discovery and My New Arrivals resolve through official resources to real playlist contents and numeric track IDs.
 - Proved artist radio resolves through the official artist radio relationship to playlist contents.
 - Proved complete collection pagination: **393 artists, 1,535 albums, 634 tracks**, with zero 429 retries during the deliberately paced full benchmark.
@@ -13,9 +46,9 @@ This file records project-level milestones and known-good checkpoints. Git histo
 - Added `search.read` and tested official search root/relationship forms with both Interpol and a documented control query. The current developer app consistently receives `400 Invalid resource ID`; one rapid burst also received a 429. Search is therefore recorded as access-blocked/unavailable for this app rather than treated as a backend implementation success. `search.write` remains disabled because no search mutation is required.
 - Current architecture direction is now proven end-to-end: official TIDAL API for browsing/discovery/metadata, HEOS/SR8015 for playback. The bridge requires metadata-based HEOS catalogue resolution rather than direct numeric-ID translation.
 - Live Daily Discovery proof used Phantogram - When I'm Small. Official API returned track `111442201`, album `111442199` (Eyelid Movies), artist `3614038`. HEOS independently returned artist `LIBARTIST-3614038`, but its matching Eyelid Movies release was `LIBALBUM-111438012` and the matching track MID was `111438014`.
-- Constructing `LIBALBUM-111442199` directly from the API album ID returned an empty HEOS container, so API album/track IDs must not be assumed to equal HEOS IDs.
+- Constructing `LIBALBUM-111442199` directly from the API album ID returned an empty HEOS container, so API album/track IDs must not be assumed to equal HEOS IDs without evidence. The later 26-track deterministic probe substantially strengthened the specific track-ID evidence where the HEOS context exposes the same MID.
 - Following the real HEOS artist -> Albums hierarchy found the matching release and title. `browse/add_to_queue` with the HEOS-returned CID/MID succeeded with `aid=3`; queue inspection confirmed When I'm Small at qid 51. A subsequent `aid=1` test successfully started the track on the SR8015.
-- Production rule: resolve official API metadata into a real HEOS catalogue context, then use HEOS-returned CID + MID for queue/playback. Numeric identity can coincide (the Phantogram artist ID did) but must be treated as an optimization/verification signal, not as a universal mapping.
+- Production rule: resolve official API metadata into a real HEOS catalogue context, then use HEOS-returned CID + MID for queue/playback. Numeric identity must be proven per identifier class and context rather than assumed globally.
 
 Runtime reconnaissance checkpoints:
 
