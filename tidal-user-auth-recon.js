@@ -1,0 +1,333 @@
+'use strict';
+
+const crypto = require('crypto');
+
+const AUTHORIZE_URL = 'https://login.tidal.com/authorize';
+const TOKEN_URL = 'https://auth.tidal.com/v1/oauth2/token';
+const API_BASE = 'https://openapi.tidal.com/v2';
+const DEFAULT_REDIRECT_URI = 'http://192.168.50.145:3100/api/tidal/oauth/callback';
+const DEFAULT_SCOPES = ['recommendations.read', 'user.read'];
+const PENDING_AUTH_TTL_MS = 10 * 60 * 1000;
+
+function base64Url(buffer) {
+  return buffer
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+function createVerifier() {
+  return base64Url(crypto.randomBytes(48));
+}
+
+function createChallenge(verifier) {
+  return base64Url(
+    crypto.createHash('sha256').update(verifier, 'ascii').digest()
+  );
+}
+
+function safeEqual(left, right) {
+  const a = Buffer.from(String(left || ''), 'utf8');
+  const b = Buffer.from(String(right || ''), 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function sendJson(res, statusCode, payload) {
+  res.statusCode = statusCode;
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.end(JSON.stringify(payload, null, 2));
+}
+
+function sendHtml(res, statusCode, title, message) {
+  res.statusCode = statusCode;
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.end(
+    '<!doctype html><html><head><meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+    `<title>${title}</title></head><body style="font-family:sans-serif;padding:2rem">` +
+    `<h1>${title}</h1><p>${message}</p></body></html>`
+  );
+}
+
+function simplifyResource(resource) {
+  if (!resource || typeof resource !== 'object') return null;
+  const attributes = resource.attributes || {};
+  return {
+    id: String(resource.id || ''),
+    type: String(resource.type || ''),
+    name: String(
+      attributes.name ||
+      attributes.title ||
+      attributes.mixName ||
+      ''
+    ),
+    relationshipKeys: resource.relationships
+      ? Object.keys(resource.relationships)
+      : []
+  };
+}
+
+function summarisePayload(payload) {
+  const data = Array.isArray(payload?.data)
+    ? payload.data
+    : payload?.data
+      ? [payload.data]
+      : [];
+  const included = Array.isArray(payload?.included) ? payload.included : [];
+
+  return {
+    dataCount: data.length,
+    data: data.slice(0, 12).map(simplifyResource),
+    includedCount: included.length,
+    included: included.slice(0, 20).map(simplifyResource),
+    links: payload?.links || null,
+    meta: payload?.meta || null
+  };
+}
+
+function createTidalUserAuthRecon(options = {}) {
+  const clientId = String(
+    options.clientId || process.env.TIDAL_CLIENT_ID || ''
+  ).trim();
+  const redirectUri = String(
+    options.redirectUri ||
+    process.env.TIDAL_REDIRECT_URI ||
+    DEFAULT_REDIRECT_URI
+  ).trim();
+  const countryCode = String(options.countryCode || 'GB').trim() || 'GB';
+  const scopes = Array.isArray(options.scopes) && options.scopes.length
+    ? options.scopes.map(scope => String(scope).trim()).filter(Boolean)
+    : DEFAULT_SCOPES.slice();
+
+  let pendingAuth = null;
+  let session = null;
+
+  function assertConfigured() {
+    if (!clientId) {
+      throw new Error('TIDAL_CLIENT_ID is not configured');
+    }
+  }
+
+  async function exchangeCode(code, verifier) {
+    const response = await fetch(TOKEN_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Accept: 'application/json'
+      },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id: clientId,
+        code,
+        redirect_uri: redirectUri,
+        code_verifier: verifier
+      })
+    });
+
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.access_token) {
+      const detail =
+        payload.error_description ||
+        payload.error ||
+        `HTTP ${response.status}`;
+      throw new Error(`TIDAL authorization-code exchange failed: ${detail}`);
+    }
+
+    const expiresIn = Math.max(60, Number(payload.expires_in) || 86400);
+    return {
+      accessToken: String(payload.access_token),
+      refreshToken: String(payload.refresh_token || ''),
+      tokenType: String(payload.token_type || 'Bearer'),
+      scope: String(payload.scope || ''),
+      expiresAt: Date.now() + expiresIn * 1000
+    };
+  }
+
+  async function apiGet(path) {
+    if (!session?.accessToken) {
+      throw new Error('TIDAL user authorization has not been completed');
+    }
+    if (Date.now() >= session.expiresAt) {
+      throw new Error('TIDAL user access token has expired; authorize again');
+    }
+
+    const response = await fetch(`${API_BASE}${path}`, {
+      headers: {
+        Authorization: `Bearer ${session.accessToken}`,
+        Accept: 'application/vnd.api+json'
+      }
+    });
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      const detail =
+        payload?.errors?.[0]?.detail ||
+        payload?.detail ||
+        `HTTP ${response.status}`;
+      throw new Error(`${response.status}: ${detail}`);
+    }
+
+    return {
+      httpStatus: response.status,
+      ...summarisePayload(payload)
+    };
+  }
+
+  async function probeRecommendations() {
+    const resources = [
+      ['dailyMixes', '/userDailyMixes/me?include=items&countryCode=' + encodeURIComponent(countryCode)],
+      ['dailyDiscovery', '/userDiscoveryMixes/me?include=items&countryCode=' + encodeURIComponent(countryCode)],
+      ['newArrivals', '/userNewReleaseMixes/me?include=items&countryCode=' + encodeURIComponent(countryCode)]
+    ];
+
+    const results = {};
+    for (const [name, path] of resources) {
+      try {
+        results[name] = {
+          ok: true,
+          ...(await apiGet(path))
+        };
+      } catch (error) {
+        results[name] = {
+          ok: false,
+          error: error.message
+        };
+      }
+    }
+    return results;
+  }
+
+  async function handle(req, res) {
+    const requestUrl = new URL(req.url, 'http://localhost');
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/login') {
+      try {
+        assertConfigured();
+        const verifier = createVerifier();
+        const state = base64Url(crypto.randomBytes(32));
+        pendingAuth = {
+          verifier,
+          state,
+          createdAt: Date.now()
+        };
+
+        const authorizeUrl = new URL(AUTHORIZE_URL);
+        authorizeUrl.searchParams.set('response_type', 'code');
+        authorizeUrl.searchParams.set('client_id', clientId);
+        authorizeUrl.searchParams.set('redirect_uri', redirectUri);
+        authorizeUrl.searchParams.set('scope', scopes.join(' '));
+        authorizeUrl.searchParams.set('code_challenge_method', 'S256');
+        authorizeUrl.searchParams.set('code_challenge', createChallenge(verifier));
+        authorizeUrl.searchParams.set('state', state);
+
+        res.statusCode = 302;
+        res.setHeader('Location', authorizeUrl.toString());
+        res.end();
+      } catch (error) {
+        sendHtml(res, 500, 'TIDAL authorization failed', error.message);
+      }
+      return true;
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/callback') {
+      try {
+        const returnedState = requestUrl.searchParams.get('state') || '';
+        const errorCode = requestUrl.searchParams.get('error') || '';
+        const errorDescription = requestUrl.searchParams.get('error_description') || '';
+
+        if (!pendingAuth) {
+          throw new Error('No TIDAL authorization attempt is pending');
+        }
+        if (Date.now() - pendingAuth.createdAt > PENDING_AUTH_TTL_MS) {
+          pendingAuth = null;
+          throw new Error('TIDAL authorization attempt expired');
+        }
+        if (!safeEqual(returnedState, pendingAuth.state)) {
+          pendingAuth = null;
+          throw new Error('TIDAL OAuth state validation failed');
+        }
+        if (errorCode) {
+          pendingAuth = null;
+          throw new Error(
+            `TIDAL denied authorization: ${errorDescription || errorCode}`
+          );
+        }
+
+        const code = String(requestUrl.searchParams.get('code') || '').trim();
+        if (!code) {
+          pendingAuth = null;
+          throw new Error('TIDAL callback did not contain an authorization code');
+        }
+
+        const verifier = pendingAuth.verifier;
+        pendingAuth = null;
+        session = await exchangeCode(code, verifier);
+
+        console.log(
+          'TIDAL USER AUTHORIZED:',
+          JSON.stringify({
+            scopesRequested: scopes,
+            tokenScope: session.scope,
+            expiresAt: new Date(session.expiresAt).toISOString(),
+            refreshTokenReceived: Boolean(session.refreshToken)
+          })
+        );
+
+        sendHtml(
+          res,
+          200,
+          'TIDAL authorization succeeded',
+          'MarantzPi now has a temporary in-memory user session for API reconnaissance. No token has been displayed or written to Git. Return to Termius.'
+        );
+      } catch (error) {
+        console.error('TIDAL USER AUTH FAILED:', error.message);
+        sendHtml(res, 400, 'TIDAL authorization failed', error.message);
+      }
+      return true;
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/status') {
+      return sendJson(res, 200, {
+        ok: true,
+        configured: Boolean(clientId),
+        redirectUri,
+        scopesRequested: scopes,
+        pending: Boolean(
+          pendingAuth && Date.now() - pendingAuth.createdAt <= PENDING_AUTH_TTL_MS
+        ),
+        authorized: Boolean(session?.accessToken && Date.now() < session.expiresAt),
+        expiresAt: session?.expiresAt
+          ? new Date(session.expiresAt).toISOString()
+          : null,
+        tokenScope: session?.scope || '',
+        refreshTokenReceived: Boolean(session?.refreshToken)
+      });
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe') {
+      try {
+        const recommendations = await probeRecommendations();
+        return sendJson(res, 200, {
+          ok: true,
+          recommendations
+        });
+      } catch (error) {
+        return sendJson(res, 401, {
+          ok: false,
+          error: error.message
+        });
+      }
+    }
+
+    return false;
+  }
+
+  return {
+    handle
+  };
+}
+
+module.exports = {
+  createTidalUserAuthRecon
+};
