@@ -4,6 +4,17 @@ const TOKEN_URL = 'https://login.tidal.com/oauth2/token';
 const API_BASE = 'https://openapi.tidal.com/v2';
 const DEFAULT_ARTIST_ID = '64520';
 
+async function apiGet(path, accessToken) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: 'application/vnd.api+json'
+    }
+  });
+  const payload = await response.json().catch(() => ({}));
+  return { response, payload };
+}
+
 async function main() {
   const clientId = String(process.env.TIDAL_CLIENT_ID || '').trim();
   const clientSecret = String(process.env.TIDAL_CLIENT_SECRET || '').trim();
@@ -30,29 +41,62 @@ async function main() {
     throw new Error(`Token request failed: ${tokenPayload.error_description || tokenPayload.error || `HTTP ${tokenResponse.status}`}`);
   }
 
-  const url = `${API_BASE}/artists/${encodeURIComponent(artistId)}/relationships/radio?countryCode=GB`;
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${tokenPayload.access_token}`,
-      Accept: 'application/vnd.api+json'
-    }
-  });
-  const payload = await response.json().catch(() => ({}));
+  const radio = await apiGet(
+    `/artists/${encodeURIComponent(artistId)}/relationships/radio?countryCode=GB`,
+    tokenPayload.access_token
+  );
+
+  if (!radio.response.ok) {
+    const detail = radio.payload?.errors?.[0]?.detail || radio.payload?.detail || `HTTP ${radio.response.status}`;
+    throw new Error(`Artist radio relationship failed: ${detail}`);
+  }
+
+  const playlistRef = Array.isArray(radio.payload?.data)
+    ? radio.payload.data.find(item => item?.type === 'playlists' && item?.id)
+    : null;
+
+  if (!playlistRef) {
+    throw new Error('Artist radio relationship did not return a playlist');
+  }
+
+  const playlist = await apiGet(
+    `/playlists/${encodeURIComponent(playlistRef.id)}?countryCode=GB&include=items`,
+    tokenPayload.access_token
+  );
+
+  const included = Array.isArray(playlist.payload?.included) ? playlist.payload.included : [];
+  const includedTracks = included
+    .filter(item => item?.type === 'tracks')
+    .map(item => ({
+      id: String(item?.id || ''),
+      title: String(item?.attributes?.title || item?.attributes?.name || '')
+    }))
+    .filter(item => item.id);
+
+  const itemRelationship = Array.isArray(playlist.payload?.data?.relationships?.items?.data)
+    ? playlist.payload.data.relationships.items.data
+    : [];
 
   const safeSummary = {
     artistId,
-    httpStatus: response.status,
-    ok: response.ok,
-    dataType: Array.isArray(payload?.data) ? 'array' : typeof payload?.data,
-    itemCount: Array.isArray(payload?.data) ? payload.data.length : (payload?.data ? 1 : 0),
-    data: payload?.data || null,
-    errors: payload?.errors || null,
-    links: payload?.links || null,
-    meta: payload?.meta || null
+    radio: {
+      httpStatus: radio.response.status,
+      playlistId: String(playlistRef.id)
+    },
+    playlist: {
+      httpStatus: playlist.response.status,
+      ok: playlist.response.ok,
+      name: String(playlist.payload?.data?.attributes?.name || playlist.payload?.data?.attributes?.title || ''),
+      relationshipItemCount: itemRelationship.length,
+      includedTrackCount: includedTracks.length,
+      firstTracks: includedTracks.slice(0, 10),
+      errors: playlist.payload?.errors || null,
+      links: playlist.payload?.links || null
+    }
   };
 
   console.log(JSON.stringify(safeSummary, null, 2));
-  if (!response.ok) process.exitCode = 1;
+  if (!playlist.response.ok) process.exitCode = 1;
 }
 
 main().catch(error => {
