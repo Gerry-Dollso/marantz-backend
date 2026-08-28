@@ -26,6 +26,7 @@ function normalise(value) {
 
 function albumNormalise(value) {
   return normalise(value)
+    .replace(/\s+'n'\s+/g, ' n ')
     .replace(/\s+(?:and|n)\s+/g, ' n ')
     .replace(/\s+/g, ' ')
     .trim();
