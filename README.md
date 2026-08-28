@@ -9,7 +9,7 @@ Active deployed/development branch: `local-ai-development`.
 Current tested functional checkpoint:
 
 ```text
-4504a08 — Cancel superseded TIDAL favourite queue builds
+2ce9132 — Use deterministic TIDAL ID matching in HEOS resolver probe
 ```
 
 The service is deployed at `/opt/marantz-backend` and runs as system service `marantz-backend.service`, HTTP port 3100. HEOS uses TCP 1255. The persistent local Qwen classifier is provided separately by `marantz-ai.service` on `127.0.0.1:8080`.
@@ -262,7 +262,7 @@ Further ASR/microphone tuning is intentionally paused pending arrival of a Seeed
 
 ## Official TIDAL API reconnaissance — 28 Aug 2026
 
-User OAuth Authorization Code + PKCE is proven live with read-only scopes `recommendations.read`, `user.read`, `collection.read` and `search.read`. The reconnaissance session is deliberately RAM-only; access/refresh tokens are never written to Git or disk. A backend restart clears the temporary user session and requires re-authorization.
+User OAuth Authorization Code + PKCE is proven live with read-only scopes `recommendations.read`, `user.read`, `collection.read` and `search.read`. Access tokens remain memory-only. The refresh token is persisted securely outside Git at `/etc/marantz-backend/tidal-refresh-token` with mode `0600`, allowing the backend to restore TIDAL authorization automatically after restart without browser re-authorization.
 
 Live official-API results support a hybrid architecture in which TIDAL OpenAPI supplies fast browsing/discovery/metadata while HEOS/SR8015 remains the playback engine:
 
@@ -279,39 +279,42 @@ Search checkpoint:
 050da79 — Add TIDAL search reconnaissance
 ```
 
-### Official API -> HEOS playback bridge — proven live
+### Official API -> HEOS playback bridge — deterministic resolution proven
 
-The end-to-end bridge from an official personalized recommendation to real SR8015 playback is now proven, but **numeric API IDs must not be assumed to equal HEOS catalogue IDs**.
+The end-to-end bridge from official personalized recommendations to HEOS is proven, but identifiers must be used with context rather than constructed blindly. The original Phantogram proof remains an important counterexample: official track ID `111442201` / album ID `111442199` resolved in HEOS as track MID `111438014` inside `LIBALBUM-111438012`. Therefore official API album/track IDs are **not universally interchangeable** with HEOS IDs.
 
-Live Daily Discovery proof used Phantogram - `When I'm Small`:
-
-```text
-Official API track id: 111442201
-Official API album id: 111442199 (Eyelid Movies)
-Official API artist id: 3614038 (Phantogram)
-
-HEOS artist cid: LIBARTIST-3614038
-HEOS album cid:  LIBALBUM-111438012 (Eyelid Movies)
-HEOS track mid:   111438014 (When I'm Small)
-```
-
-A direct constructed browse of `LIBALBUM-111442199` returned an empty container, proving that official album IDs cannot be blindly converted to HEOS album CIDs. Following the real HEOS artist hierarchy instead found `LIBALBUM-111438012`; browsing that container exposed the matching title with MID `111438014`.
-
-The resolved HEOS context was then tested with `browse/add_to_queue`: `aid=3` successfully appended the track and queue inspection confirmed Phantogram - When I'm Small at qid 51; `aid=1` then successfully started playback on the SR8015.
-
-Production bridge rule: use official API metadata for discovery, then resolve into a real HEOS catalogue context by metadata/relationships and use the HEOS-returned CID + MID for playback. Artist IDs may coincide across APIs (Phantogram did), but this is not a safe universal assumption; album and track IDs demonstrably differed for this release.
-
-Parameterized reconnaissance endpoint used for this proof:
+A later read-only resolver probe tested 26 representative recommendation tracks across My Mix 1, My Daily Discovery and My New Arrivals without issuing any player, queue, source or volume commands. The final result was:
 
 ```text
-GET /api/tidal/oauth/probe-track?id=<numeric-track-id>
+23 resolved
+1 ambiguous
+2 unresolved
+0 errors
 ```
 
-Runtime checkpoint:
+Of the 23 resolved tracks, **22 resolved through `direct-album-id+official-mid`**. Swans - `Screen Shot` resolved through the artist -> album -> track fallback. The important deterministic rule is narrower than universal ID equality: **when a real candidate HEOS context exposes a playable MID exactly equal to the official TIDAL track ID, treat that as deterministic track identity.**
+
+This rule remains valid even when HEOS and official TIDAL metadata display different primary artist credits. Vince Staples - `Who Are You` exposed official track ID / HEOS MID `536071631` while HEOS displayed Dahi. `That's Law` exposed official track ID / HEOS MID `536793606` while HEOS displayed CZARFACE rather than Frankie Pulitzer. Those metadata differences do not override an exact numeric track-identity match inside the expected catalogue context.
+
+Other useful findings:
+
+- My Life With The Thrill Kill Kult - `A Daisy Chain 4 Satan (Acid & Flowers Mix)` resolved once HEOS `%26` title encoding was normalized; official track ID and HEOS MID are both `113779406`.
+- Ladytron - `Destroy Everything You Touch` became deterministic through the exact official-MID tie-break among otherwise matching candidates.
+- The Sugarcubes - `Birthday` remains deliberately ambiguous because two HEOS album/track candidates satisfy the current metadata evidence and neither MID equals official track ID `34454218`.
+- Public Image Ltd. - `Rise` remains unresolved because the current artist traversal exposes no matching HEOS album-title candidate.
+- 16 Horsepower - `Black Soul Choir` remains unresolved; HEOS exposes album title `Sackcloth -N- Ashes` rather than official `Sackcloth 'N' Ashes`, and the current resolver has not yet established a unique playable track context.
+
+Production bridge rule: use official TIDAL metadata as the discovery identity, resolve a real HEOS catalogue context, prefer an exact official-track-ID == HEOS-MID match when that context exposes one, and otherwise use validated metadata traversal. Ambiguous results must fail closed rather than selecting a plausible candidate.
+
+Read-only resolver checkpoint sequence:
 
 ```text
-153bc83 — Add parameterized TIDAL track metadata probe
+e2b45dd — Add read-only TIDAL HEOS resolution probe
+a616299 — Refine read-only TIDAL HEOS resolution probe
+2ce9132 — Use deterministic TIDAL ID matching in HEOS resolver probe
 ```
+
+The next investigation is read-only reverse lookup: start from known TIDAL track IDs / HEOS MIDs, including the unresolved and ambiguous controls, and determine whether HEOS exposes a deterministic way to recover the required playable container/CID. Do not add playback commands until that identifier relationship is understood.
 
 ## Rich TIDAL browsing direction
 
