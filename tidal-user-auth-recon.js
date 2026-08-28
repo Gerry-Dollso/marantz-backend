@@ -464,7 +464,36 @@ function createTidalUserAuthRecon(options = {}) {
     };
   }
 
-  async function probeSearch() {
+
+  async function probeTrackMetadata(trackId) {
+    if (!session?.accessToken) {
+      throw new Error('TIDAL user authorization has not been completed');
+    }
+    if (Date.now() >= session.expiresAt) {
+      throw new Error('TIDAL user access token has expired; authorize again');
+    }
+    if (!/^\d+$/.test(trackId || '')) {
+      throw new Error('Track id must contain digits only');
+    }
+
+    const response = await fetch(
+      API_BASE + '/tracks/' + encodeURIComponent(trackId) +
+        '?include=artists,albums,albums.coverArt&countryCode=' + encodeURIComponent(countryCode),
+      {
+        headers: {
+          Authorization: 'Bearer ' + session.accessToken,
+          Accept: 'application/vnd.api+json'
+        }
+      }
+    );
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const detail = payload?.errors?.[0]?.detail || payload?.detail || ('HTTP ' + response.status);
+      throw new Error(detail);
+    }
+    return payload;
+  }
+async function probeSearch() {
     if (!session?.accessToken) {
       throw new Error('TIDAL user authorization has not been completed');
     }
@@ -663,6 +692,16 @@ function createTidalUserAuthRecon(options = {}) {
         return sendJson(res, 200, { ok: true, search });
       } catch (error) {
         return sendJson(res, 401, { ok: false, error: error.message });
+      }
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe-track') {
+      try {
+        const trackId = requestUrl.searchParams.get('id') || '';
+        const track = await probeTrackMetadata(trackId);
+        return sendJson(res, 200, { ok: true, track });
+      } catch (error) {
+        return sendJson(res, 400, { ok: false, error: error.message });
       }
     }
 
