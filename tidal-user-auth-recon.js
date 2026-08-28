@@ -258,6 +258,42 @@ function createTidalUserAuthRecon(options = {}) {
     };
   }
 
+  async function apiGetRaw(path) {
+    await ensureSession();
+
+    const response = await fetch(`${API_BASE}${path}`, {
+      headers: {
+        Authorization: `Bearer ${session.accessToken}`,
+        Accept: 'application/vnd.api+json'
+      }
+    });
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      const detail =
+        payload?.errors?.[0]?.detail ||
+        payload?.detail ||
+        `HTTP ${response.status}`;
+      throw new Error(`${response.status}: ${detail}`);
+    }
+
+    return payload;
+  }
+
+  async function probeRawRecommendations() {
+    const resources = {
+      dailyMixes: '/userDailyMixes/me?include=items&countryCode=' + encodeURIComponent(countryCode),
+      dailyDiscovery: '/userDiscoveryMixes/me?include=items&countryCode=' + encodeURIComponent(countryCode),
+      newArrivals: '/userNewReleaseMixes/me?include=items&countryCode=' + encodeURIComponent(countryCode)
+    };
+
+    const results = {};
+    for (const [name, resourcePath] of Object.entries(resources)) {
+      results[name] = await apiGetRaw(resourcePath);
+    }
+    return results;
+  }
+
   async function probeRecommendations() {
     const resources = [
       ['dailyMixes', '/userDailyMixes/me?include=items&countryCode=' + encodeURIComponent(countryCode)],
@@ -864,6 +900,15 @@ async function probeSearch() {
       try {
         const collections = await probeCollections();
         return sendJson(res, 200, { ok: true, collections });
+      } catch (error) {
+        return sendJson(res, 401, { ok: false, error: error.message });
+      }
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe-recommendations-raw') {
+      try {
+        const recommendations = await probeRawRecommendations();
+        return sendJson(res, 200, { ok: true, recommendations });
       } catch (error) {
         return sendJson(res, 401, { ok: false, error: error.message });
       }
