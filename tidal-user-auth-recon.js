@@ -903,7 +903,8 @@ async function probeSearch() {
   }
 
   return {
-    handle
+    handle,
+    getTrackMetadata: probeTrackMetadata
   };
 }
 

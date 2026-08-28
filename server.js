@@ -23,6 +23,9 @@ const {
 const {
   createTidalBrowseCache
 } = require('./tidal-browse-cache');
+const {
+  createTidalHeosResolver
+} = require('./tidal-heos-resolver');
 
 const AVR_HOST = '192.168.50.220';
 const AVR_PORT = 23;
@@ -35,6 +38,10 @@ const tidalBrowseCache = createTidalBrowseCache({ maxEntries: 64 });
 
 const tidalUserAuthRecon = createTidalUserAuthRecon({
   countryCode: 'GB'
+});
+const tidalHeosResolver = createTidalHeosResolver({
+  heosBrowse,
+  sid: '10'
 });
 let pendingTidalVoiceSearch = null;
 let tidalVoiceSearchSequence = 0;
@@ -896,6 +903,27 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (await tidalUserAuthRecon.handle(req, res)) return;
+
+  if (req.method === 'GET' && req.url.startsWith('/api/tidal/resolve-track?')) {
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      const id = String(url.searchParams.get('id') || '').trim();
+      if (!/^\d+$/.test(id)) {
+        return sendJson(res, 400, { error: 'Track id must contain digits only' });
+      }
+
+      const metadata = await tidalUserAuthRecon.getTrackMetadata(id);
+      const track = tidalHeosResolver.extractOfficialTrack(metadata);
+      const resolution = await tidalHeosResolver.resolveTrack(track);
+      return sendJson(res, 200, {
+        ok: true,
+        track,
+        resolution
+      });
+    } catch (error) {
+      return sendJson(res, 502, { ok: false, error: error.message });
+    }
+  }
 
   if (req.method === 'GET' && req.url.startsWith('/api/tidal/browse?')) {
     try {
