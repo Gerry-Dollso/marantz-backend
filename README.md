@@ -2,14 +2,14 @@
 
 Companion media/orchestration backend for marantzPI. It runs on the HP EliteDesk media server and exposes HEOS/TIDAL library operations plus validated semantic control used by the Raspberry Pi touchscreen and voice listener.
 
-## Current known-good state — 27 Aug 2026
+## Current known-good state — 28 Aug 2026
 
 Active deployed/development branch: `local-ai-development`.
 
 Current tested functional checkpoint:
 
 ```text
-51c3135 — Add full TIDAL favourite tracks playback
+848558a — Harden TIDAL favourite tracks queueing
 ```
 
 The service is deployed at `/opt/marantz-backend` and runs as system service `marantz-backend.service`, HTTP port 3100. HEOS uses TCP 1255. The persistent local Qwen classifier is provided separately by `marantz-ai.service` on `127.0.0.1:8080`.
@@ -122,7 +122,11 @@ The route uses the full cached `My Music-Tracks|all` list, keeps only playable e
 - `shuffle=0`: first favourite is sent with `aid=4`, then remaining MIDs are appended in saved order with `aid=3`.
 - `shuffle=1`: the complete full-library list is Fisher-Yates shuffled first, then the first random track is started with `aid=4` and the remainder are appended in that shuffled order.
 - Queue additions are deliberately sequential rather than concurrent because sequential HEOS command handling has proven reliable.
+- Each `browse/add_to_queue` operation in this full-library builder has a dedicated 15-second HEOS timeout. The normal 5-second `heosBrowse()` default proved too short for some legitimate queue additions.
+- A failed or timed-out favourite is logged and skipped individually; it no longer aborts the entire queue build. The first successful track receives `aid=4`; later successful tracks receive `aid=3`.
 - Playback begins from the first selected track before the whole 576-track queue is finished; the remainder builds quietly behind playback.
+
+Live diagnosis on 28 Aug 2026 showed that the earlier 5-second timeout produced false `TIDAL FAVOURITE TRACK SKIP` messages and eventually HEOS `eid=12 / syserrno=-2000` errors as commands accumulated. After restarting onto the 15-second per-track timeout, a clean Shuffle All test grew from 9 to 34 queued tracks with zero new skip messages. Preserve the longer timeout locally for this queue builder rather than increasing the global HEOS timeout.
 
 This means Play All and Shuffle All are genuinely full-library operations rather than 50-track-page operations. In live testing, the queue grew beyond the old 50-track ceiling while playback continued normally. Shuffle All produced a random opening sequence (for example Joy Division -> Blue Oyster Cult -> Black Flag) and continued appending the rest in the already-randomised order.
 
@@ -159,6 +163,9 @@ Checkpoint sequence:
 b6e0230 — Fix favourite Tracks HEOS CID handling
 2cec949 — Fix Favourite Tracks HEOS CID self reference
 51c3135 — Add full TIDAL favourite tracks playback
+c7f508a — Add per-track failure isolation migration
+96fff02 — Add 15-second queue timeout migration
+848558a — Harden TIDAL favourite tracks queueing
 ```
 
 ## TIDAL semantic contract

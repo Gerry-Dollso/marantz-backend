@@ -2,6 +2,21 @@
 
 This file records project-level milestones and known-good checkpoints. Git history remains the detailed source for individual code changes.
 
+## 2026-08-28 — TIDAL Favourite Tracks queue hardening
+
+- Diagnosed the apparent unavailable-favourite problem as HEOS command latency rather than a catalogue problem. The shared `heosBrowse()` default is 5 seconds, but legitimate `browse/add_to_queue` operations can take longer.
+- Kept the global HEOS timeout unchanged and gave only the full Favourite Tracks queue builder a 15-second per-track timeout.
+- Added per-track failure isolation: one genuine failure is logged and skipped without aborting the remaining full-library queue build. The first successful track uses `aid=4`; subsequent successful tracks use `aid=3`.
+- The earlier 5-second behaviour produced repeated false timeout skips and eventually `eid=12 / syserrno=-2000` errors while HEOS was still processing prior commands.
+- Clean live Shuffle All verification after service restart grew the queue from 9 to 34 tracks with zero new skip messages.
+- Sequential background queue construction remains intentional; do not replace it with concurrent bursts.
+
+Current tested backend checkpoint:
+
+```text
+848558a — Harden TIDAL favourite tracks queueing
+```
+
 ## 2026-08-27 — Full TIDAL Favourite Tracks playback
 
 - Replaced the practical limitations of the old 50-track/page favourite Tracks workflow with a full-library queue path backed by the new browse cache.
