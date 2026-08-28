@@ -925,6 +925,46 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  if (req.method === 'GET' && req.url.startsWith('/api/tidal/play-resolved?')) {
+    try {
+      await supersedeAndDrainTidalQueueBuild();
+      const url = new URL(req.url, 'http://localhost');
+      const id = String(url.searchParams.get('id') || '').trim();
+      if (!/^\d+$/.test(id)) {
+        return sendJson(res, 400, { error: 'Track id must contain digits only' });
+      }
+
+      const metadata = await tidalUserAuthRecon.getTrackMetadata(id);
+      const track = tidalHeosResolver.extractOfficialTrack(metadata);
+      const resolution = await tidalHeosResolver.resolveTrack(track);
+
+      if (resolution.status !== 'resolved' || !resolution.cid || !resolution.mid) {
+        return sendJson(res, 409, {
+          ok: false,
+          track,
+          resolution,
+          error: 'Track could not be resolved safely for HEOS playback'
+        });
+      }
+
+      await heosBrowse(
+        'heos://browse/add_to_queue?pid=' + encodeURIComponent(PLAYER_ID) +
+        '&sid=10&cid=' + encodeURIComponent(resolution.cid) +
+        '&mid=' + encodeURIComponent(resolution.mid) +
+        '&aid=4'
+      );
+
+      return sendJson(res, 200, {
+        ok: true,
+        action: 'play-only',
+        track,
+        resolution
+      });
+    } catch (error) {
+      return sendJson(res, 502, { ok: false, error: error.message });
+    }
+  }
+
   if (req.method === 'GET' && req.url.startsWith('/api/tidal/browse?')) {
     try {
       const url = new URL(req.url, 'http://localhost');
