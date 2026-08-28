@@ -32,7 +32,29 @@ const tidalBrowseCache = createTidalBrowseCache({ maxEntries: 64 });
 
 let pendingTidalVoiceSearch = null;
 let tidalVoiceSearchSequence = 0;
+let tidalQueueGeneration = 0;
+let tidalFavouriteQueueCommand = null;
 const voiceAliases = createVoiceAliasStore();
+
+function supersedeTidalQueueBuild() {
+  tidalQueueGeneration += 1;
+  return tidalQueueGeneration;
+}
+
+function tidalQueueBuildIsCurrent(generation) {
+  return generation === tidalQueueGeneration;
+}
+
+async function supersedeAndDrainTidalQueueBuild() {
+  supersedeTidalQueueBuild();
+  const pending = tidalFavouriteQueueCommand;
+  if (!pending) return;
+  try {
+    await pending;
+  } catch {
+    // The cancelled Favourite Tracks loop owns/logs its HEOS failure.
+  }
+}
 
 function sendCommand(port, command, matcher, timeoutMs = 2000) {
   return new Promise((resolve, reject) => {
@@ -1026,6 +1048,7 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && req.url.startsWith('/api/tidal/play?')) {
     try {
+      await supersedeAndDrainTidalQueueBuild();
       const url = new URL(req.url, 'http://localhost');
       const cid = url.searchParams.get('cid');
       const selectedMid = url.searchParams.get('mid');
@@ -1093,6 +1116,7 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && req.url.startsWith('/api/tidal/track/action?')) {
     try {
+      await supersedeAndDrainTidalQueueBuild();
       const url = new URL(req.url, 'http://localhost');
       const cid = String(url.searchParams.get('cid') || '').trim();
       const mid = String(url.searchParams.get('mid') || '').trim();
@@ -1195,6 +1219,7 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && req.url.startsWith('/api/tidal/tracks/play-all?')) {
     try {
+      const queueGeneration = supersedeTidalQueueBuild();
       const url = new URL(req.url, 'http://localhost');
       const shuffle = url.searchParams.get('shuffle') === '1';
       const cid = 'My Music-Tracks';
@@ -1251,19 +1276,43 @@ const server = http.createServer(async (req, res) => {
       let skippedCount = 0;
       let firstMid = '';
 
+      let cancelled = false;
+
       for (const track of queueTracks) {
+        if (!tidalQueueBuildIsCurrent(queueGeneration)) {
+          cancelled = true;
+          break;
+        }
+
         const aid = queuedCount === 0 ? 4 : 3;
         try {
-          await heosBrowse(
+          const queueCommand = heosBrowse(
             'heos://browse/add_to_queue?pid=' + encodeURIComponent(PLAYER_ID) +
             '&sid=10&cid=' + heosCid +
             '&mid=' + encodeURIComponent(track.mid) +
             '&aid=' + aid,
             15000
           );
+          tidalFavouriteQueueCommand = queueCommand;
+          try {
+            await queueCommand;
+          } finally {
+            if (tidalFavouriteQueueCommand === queueCommand) {
+              tidalFavouriteQueueCommand = null;
+            }
+          }
+          if (!tidalQueueBuildIsCurrent(queueGeneration)) {
+            cancelled = true;
+            break;
+          }
           if (queuedCount === 0) firstMid = String(track.mid);
           queuedCount += 1;
         } catch (error) {
+          if (!tidalQueueBuildIsCurrent(queueGeneration)) {
+            cancelled = true;
+            break;
+          }
+
           skippedCount += 1;
           console.warn(
             'TIDAL FAVOURITE TRACK SKIP:',
@@ -1277,6 +1326,29 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
+      if (cancelled || !tidalQueueBuildIsCurrent(queueGeneration)) {
+        console.log(
+          'TIDAL FAVOURITE TRACK BUILD CANCELLED:',
+          JSON.stringify({
+            queued: queuedCount,
+            skipped: skippedCount,
+            attempted: queueTracks.length,
+            shuffle
+          })
+        );
+
+        return sendJson(res, 200, {
+          ok: true,
+          cancelled: true,
+          queued: queuedCount,
+          skipped: skippedCount,
+          attempted: queueTracks.length,
+          shuffle,
+          firstMid,
+          sourceCached: cachedResult.cached
+        });
+      }
+
       if (!queuedCount) {
         throw new Error('No Favourite Tracks could be queued');
       }
@@ -1288,6 +1360,7 @@ const server = http.createServer(async (req, res) => {
 
       return sendJson(res, 200, {
         ok: true,
+        cancelled: false,
         queued: queuedCount,
         skipped: skippedCount,
         attempted: queueTracks.length,
@@ -1302,6 +1375,7 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && req.url.startsWith('/api/tidal/playlist/play?')) {
     try {
+      await supersedeAndDrainTidalQueueBuild();
       const url = new URL(req.url, 'http://localhost');
       const cid = url.searchParams.get('cid');
       const selectedMid = url.searchParams.get('mid');
