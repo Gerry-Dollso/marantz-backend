@@ -9,7 +9,7 @@ Active deployed/development branch: `local-ai-development`.
 Current tested functional checkpoint:
 
 ```text
-2ce9132 — Use deterministic TIDAL ID matching in HEOS resolver probe
+cbcd4ac — Fix HEOS album N-separator normalization
 ```
 
 The service is deployed at `/opt/marantz-backend` and runs as system service `marantz-backend.service`, HTTP port 3100. HEOS uses TCP 1255. The persistent local Qwen classifier is provided separately by `marantz-ai.service` on `127.0.0.1:8080`.
@@ -300,9 +300,10 @@ Other useful findings:
 
 - My Life With The Thrill Kill Kult - `A Daisy Chain 4 Satan (Acid & Flowers Mix)` resolved once HEOS `%26` title encoding was normalized; official track ID and HEOS MID are both `113779406`.
 - Ladytron - `Destroy Everything You Touch` became deterministic through the exact official-MID tie-break among otherwise matching candidates.
-- The Sugarcubes - `Birthday` remains deliberately ambiguous because two HEOS album/track candidates satisfy the current metadata evidence and neither MID equals official track ID `34454218`.
-- Public Image Ltd. - `Rise` remains unresolved because the current artist traversal exposes no matching HEOS album-title candidate.
-- 16 Horsepower - `Black Soul Choir` remains unresolved; HEOS exposes album title `Sackcloth -N- Ashes` rather than official `Sackcloth 'N' Ashes`, and the current resolver has not yet established a unique playable track context.
+- In the original fixed 26-track sample, The Sugarcubes - `Birthday` remained deliberately ambiguous because two HEOS album/track candidates satisfied the available metadata evidence and neither MID equalled official track ID `34454218`. Public Image Ltd. - `Rise` remained unresolved because that sample's artist traversal exposed no matching HEOS album-title candidate. Preserve these as useful hard edge cases rather than rewriting the historical result.
+- 16 Horsepower - `Black Soul Choir` was subsequently diagnosed precisely: official track `35888116` / album `35888114` maps to HEOS `LIBALBUM-635299` / MID `635301`. The failure was a general album-normalization bug: `Sackcloth 'N' Ashes` retained quote characters while HEOS `Sackcloth -N- Ashes` did not. Commit `cbcd4ac` normalizes quote-delimited `'N'` as the same album separator as `-N-`/`N`; it is not a 16 Horsepower special case.
+- After that fix, a fresh personalized 26-track sample resolved **26/26, with 0 ambiguous, 0 unresolved and 0 errors**. TIDAL had refreshed the personalized mixes, so this is a second sample rather than evidence that the one-line fix alone transformed the original 23/26 sample into 26/26. In the fresh sample, 23 tracks resolved through `direct-album-id+official-mid`; April Skies, Screen Shot and Black Soul Choir resolved through structured `artist-album-track` traversal.
+- Read-only reverse-context reconnaissance also established that HEOS Track search (`scid=3`) is human-text search rather than numeric MID lookup. Browsing both bare `SEARCHED_TRACKS-` and the plausible `SEARCHED_TRACKS-Rise` form returned the normal four-item TIDAL root, not a search-results container. Treat that reverse-CID avenue as closed; do not invent further synthetic CID variants.
 
 Production bridge rule: use official TIDAL metadata as the discovery identity, resolve a real HEOS catalogue context, prefer an exact official-track-ID == HEOS-MID match when that context exposes one, and otherwise use validated metadata traversal. Ambiguous results must fail closed rather than selecting a plausible candidate.
 
@@ -312,9 +313,12 @@ Read-only resolver checkpoint sequence:
 e2b45dd — Add read-only TIDAL HEOS resolution probe
 a616299 — Refine read-only TIDAL HEOS resolution probe
 2ce9132 — Use deterministic TIDAL ID matching in HEOS resolver probe
+e48613e — Add read-only HEOS reverse context probe
+0817a62 — Add guarded HEOS album separator normalization migration
+cbcd4ac — Fix HEOS album N-separator normalization
 ```
 
-The next investigation is read-only reverse lookup: start from known TIDAL track IDs / HEOS MIDs, including the unresolved and ambiguous controls, and determine whether HEOS exposes a deterministic way to recover the required playable container/CID. Do not add playback commands until that identifier relationship is understood.
+The simple reverse-context avenue is now closed: HEOS text search does not accept numeric MID as an identifier lookup, and the advertised `SEARCHED_TRACKS-` prefix did not expose a browsable results CID. Continue improving the structured resolver from proven catalogue evidence; keep ambiguity fail-closed and do not invent undocumented CID forms.
 
 ## Rich TIDAL browsing direction
 

@@ -2,6 +2,29 @@
 
 This file records project-level milestones and known-good checkpoints. Git history remains the detailed source for individual code changes.
 
+## 2026-08-28 — HEOS resolver normalization and second-sample validation
+
+- Diagnosed the remaining 16 Horsepower failure against the real HEOS album container. Official TIDAL track `35888116` / album `35888114` (`Sackcloth 'N' Ashes`) maps to HEOS `LIBALBUM-635299` / MID `635301` (`Sackcloth -N- Ashes`).
+- Proved the resolver bug was general album normalization, not missing catalogue content: apostrophes survived the common normalizer, so `'N'` and `-N-` never converged. Added quote-delimited N-separator normalization in `cbcd4ac`; no artist-specific exception was added.
+- Re-ran the read-only resolver after the fix against the then-current personalized recommendations. TIDAL had refreshed the mixes, so this was a new 26-track sample rather than the original fixed sample. Result: **26/26 resolved, 0 ambiguous, 0 unresolved, 0 errors**.
+- In the fresh sample, 23/26 resolved through `direct-album-id+official-mid`; April Skies, Screen Shot and Black Soul Choir resolved through structured `artist-album-track` traversal.
+- Preserve the earlier 23/26, 1 ambiguous, 2 unresolved result as a separate hard edge-case checkpoint. Do not claim that the one-line normalization change alone converted that exact sample to 26/26. Birthday and Rise remain valuable historical edge cases from that original sample.
+- Closed the simple HEOS reverse-context experiment. Track search `scid=3` behaves as human-text search, not numeric MID lookup; numeric-ID searches produced no exact MID hits even for known-good controls. Browsing both `SEARCHED_TRACKS-` and `SEARCHED_TRACKS-Rise` returned the normal TIDAL root rather than a search-results container. Do not spend further time inventing synthetic `SEARCHED_TRACKS-*` CIDs.
+
+Current tested resolver checkpoint:
+
+```text
+cbcd4ac — Fix HEOS album N-separator normalization
+```
+
+Checkpoint additions:
+
+```text
+e48613e — Add read-only HEOS reverse context probe
+0817a62 — Add guarded HEOS album separator normalization migration
+cbcd4ac — Fix HEOS album N-separator normalization
+```
+
 ## 2026-08-28 — Persistent TIDAL user authorization and deterministic HEOS resolution
 
 - Added persistent TIDAL user OAuth refresh-token authorization for the official user-scoped API. Access tokens remain short-lived in memory; the refresh token is stored outside Git in `/etc/marantz-backend/tidal-refresh-token` with owner `gerry:gerry` and mode `0600`.
