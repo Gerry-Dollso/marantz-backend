@@ -342,6 +342,25 @@ function createTidalUserAuthRecon(options = {}) {
     return apiGetRaw(resourcePath);
   }
 
+  async function probePlaylistItemsPage(playlistId, cursor) {
+    const id = String(playlistId || '').trim();
+    if (!/^[a-zA-Z0-9]+$/.test(id)) {
+      throw new Error('Playlist id must be alphanumeric');
+    }
+
+    const pageCursor = String(cursor || '').trim();
+    if (!pageCursor || !/^[a-zA-Z0-9_-]+$/.test(pageCursor)) {
+      throw new Error('Playlist cursor is required and contains unsupported characters');
+    }
+
+    return apiGetRaw(
+      '/playlists/' + encodeURIComponent(id) + '/relationships/items' +
+      '?countryCode=' + encodeURIComponent(countryCode) +
+      '&page%5Bcursor%5D=' + encodeURIComponent(pageCursor) +
+      '&include=' + encodeURIComponent('items')
+    );
+  }
+
   async function probeRecommendations() {
     const resources = [
       ['dailyMixes', '/userDailyMixes/me?include=items&countryCode=' + encodeURIComponent(countryCode)],
@@ -988,6 +1007,17 @@ async function probeSearch() {
         const cursor = requestUrl.searchParams.get('cursor') || '';
         const playlist = await probePlaylistArtworkAndPage(playlistId, cursor);
         return sendJson(res, 200, { ok: true, playlist });
+      } catch (error) {
+        return sendJson(res, 400, { ok: false, error: error.message });
+      }
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe-playlist-items-page') {
+      try {
+        const playlistId = requestUrl.searchParams.get('id') || '';
+        const cursor = requestUrl.searchParams.get('cursor') || '';
+        const items = await probePlaylistItemsPage(playlistId, cursor);
+        return sendJson(res, 200, { ok: true, items });
       } catch (error) {
         return sendJson(res, 400, { ok: false, error: error.message });
       }
