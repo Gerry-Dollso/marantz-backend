@@ -6,7 +6,7 @@ const AUTHORIZE_URL = 'https://login.tidal.com/authorize';
 const TOKEN_URL = 'https://auth.tidal.com/v1/oauth2/token';
 const API_BASE = 'https://openapi.tidal.com/v2';
 const DEFAULT_REDIRECT_URI = 'http://192.168.50.145:3100/api/tidal/oauth/callback';
-const DEFAULT_SCOPES = ['recommendations.read', 'user.read'];
+const DEFAULT_SCOPES = ['recommendations.read', 'user.read', 'collection.read'];
 const PENDING_AUTH_TTL_MS = 10 * 60 * 1000;
 
 function base64Url(buffer) {
@@ -37,6 +37,7 @@ function sendJson(res, statusCode, payload) {
   res.statusCode = statusCode;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.end(JSON.stringify(payload, null, 2));
+  return true;
 }
 
 function sendHtml(res, statusCode, title, message) {
@@ -198,6 +199,114 @@ function createTidalUserAuthRecon(options = {}) {
     return results;
   }
 
+  async function probePersonalisedPlaylists() {
+    const recommendationSets = await probeRecommendations();
+    const selected = [];
+
+    const addPlaylist = (label, item) => {
+      if (!item?.id || item.type !== 'playlists') return;
+      selected.push({ label, id: item.id, name: item.name || label });
+    };
+
+    const mixes = recommendationSets.dailyMixes?.included || [];
+    addPlaylist('My Mix 1', mixes.find(item => item.name === 'My Mix 1'));
+    addPlaylist('My Daily Discovery', recommendationSets.dailyDiscovery?.included?.[0]);
+    addPlaylist('My New Arrivals', recommendationSets.newArrivals?.included?.[0]);
+
+    const results = {};
+    for (const playlist of selected) {
+      try {
+        results[playlist.label] = {
+          playlistId: playlist.id,
+          playlistName: playlist.name,
+          ok: true,
+          ...(await apiGet(
+            '/playlists/' + encodeURIComponent(playlist.id) +
+            '?include=items&countryCode=' + encodeURIComponent(countryCode)
+          ))
+        };
+      } catch (error) {
+        results[playlist.label] = {
+          playlistId: playlist.id,
+          playlistName: playlist.name,
+          ok: false,
+          error: error.message
+        };
+      }
+    }
+
+    return {
+      discoveredCount: selected.length,
+      playlists: results
+    };
+  }
+
+  async function inspectCollectionResource(path) {
+    if (!session?.accessToken) {
+      throw new Error('TIDAL user authorization has not been completed');
+    }
+    if (Date.now() >= session.expiresAt) {
+      throw new Error('TIDAL user access token has expired; authorize again');
+    }
+
+    const startedAt = process.hrtime.bigint();
+    const response = await fetch(API_BASE + path, {
+      headers: {
+        Authorization: 'Bearer ' + session.accessToken,
+        Accept: 'application/vnd.api+json'
+      }
+    });
+    const payload = await response.json().catch(() => ({}));
+    const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+
+    if (!response.ok) {
+      const detail = payload?.errors?.[0]?.detail || payload?.detail || ('HTTP ' + response.status);
+      throw new Error(response.status + ': ' + detail);
+    }
+
+    const included = Array.isArray(payload?.included) ? payload.included : [];
+    const first = included[0] || null;
+    const attrs = first?.attributes || {};
+
+    return {
+      httpStatus: response.status,
+      elapsedMs: Math.round(elapsedMs * 10) / 10,
+      includedCount: included.length,
+      firstResource: first ? {
+        id: String(first.id || ''),
+        type: String(first.type || ''),
+        attributeKeys: Object.keys(attrs),
+        attributes: Object.fromEntries(
+          Object.entries(attrs).filter(([key, value]) =>
+            ['name', 'title', 'duration', 'releaseDate', 'barcodeId', 'explicit', 'popularity'].includes(key) &&
+            ['string', 'number', 'boolean'].includes(typeof value)
+          )
+        ),
+        relationshipKeys: first.relationships ? Object.keys(first.relationships) : []
+      } : null,
+      links: payload?.links || null,
+      meta: payload?.meta || null
+    };
+  }
+
+  async function probeCollections() {
+    const resources = [
+      ['artists', '/userCollectionArtists/me?include=items&countryCode=' + encodeURIComponent(countryCode)],
+      ['albums', '/userCollectionAlbums/me?include=items&countryCode=' + encodeURIComponent(countryCode)],
+      ['tracks', '/userCollectionTracks/me?include=items&countryCode=' + encodeURIComponent(countryCode)]
+    ];
+
+    const results = {};
+    for (const [name, path] of resources) {
+      try {
+        results[name] = { ok: true, ...(await inspectCollectionResource(path)) };
+      } catch (error) {
+        results[name] = { ok: false, error: error.message };
+      }
+    }
+    return results;
+  }
+
   async function handle(req, res) {
     const requestUrl = new URL(req.url, 'http://localhost');
 
@@ -303,6 +412,30 @@ function createTidalUserAuthRecon(options = {}) {
         tokenScope: session?.scope || '',
         refreshTokenReceived: Boolean(session?.refreshToken)
       });
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe-collections') {
+      try {
+        const collections = await probeCollections();
+        return sendJson(res, 200, { ok: true, collections });
+      } catch (error) {
+        return sendJson(res, 401, { ok: false, error: error.message });
+      }
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe-playlists') {
+      try {
+        const personalisedPlaylists = await probePersonalisedPlaylists();
+        return sendJson(res, 200, {
+          ok: true,
+          personalisedPlaylists
+        });
+      } catch (error) {
+        return sendJson(res, 401, {
+          ok: false,
+          error: error.message
+        });
+      }
     }
 
     if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe') {

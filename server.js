@@ -15,6 +15,9 @@ const {
   createTidalLiveAdapter
 } = require('./ai/tidal-live-adapter');
 const {
+  createTidalUserAuthRecon
+} = require('./tidal-user-auth-recon');
+const {
   createTidalMetadataClient
 } = require('./tidal-metadata-client');
 const {
@@ -30,6 +33,9 @@ const AI_FALLBACK_ENABLED = process.env.MARANTZ_AI_FALLBACK === '1';
 const tidalMetadata = createTidalMetadataClient({ countryCode: 'GB' });
 const tidalBrowseCache = createTidalBrowseCache({ maxEntries: 64 });
 
+const tidalUserAuthRecon = createTidalUserAuthRecon({
+  countryCode: 'GB'
+});
 let pendingTidalVoiceSearch = null;
 let tidalVoiceSearchSequence = 0;
 let tidalQueueGeneration = 0;
@@ -888,6 +894,8 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 400, { error: error.message });
     }
   }
+
+  if (await tidalUserAuthRecon.handle(req, res)) return;
 
   if (req.method === 'GET' && req.url.startsWith('/api/tidal/browse?')) {
     try {
