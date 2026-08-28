@@ -2,6 +2,23 @@
 
 This file records project-level milestones and known-good checkpoints. Git history remains the detailed source for individual code changes.
 
+## 2026-08-28 — Official TIDAL API reconnaissance
+
+- Proved temporary user OAuth Authorization Code + PKCE with read-only recommendation, user, collection and search scopes. Tokens remain RAM-only for reconnaissance.
+- Proved My Mix 1-8, My Daily Discovery and My New Arrivals resolve through official resources to real playlist contents and numeric track IDs.
+- Proved artist radio resolves through the official artist radio relationship to playlist contents.
+- Proved complete collection pagination: **393 artists, 1,535 albums, 634 tracks**, with zero 429 retries during the deliberately paced full benchmark.
+- Most successful collection page fetches were roughly 120-160 ms excluding deliberate one-second pacing, supporting an API-first browse/cache design.
+- Proved rich artist profile art, album cover art/artist relationships and nested track -> artist/album/cover-art metadata.
+- Added `search.read` and tested official search root/relationship forms with both Interpol and a documented control query. The current developer app consistently receives `400 Invalid resource ID`; one rapid burst also received a 429. Search is therefore recorded as access-blocked/unavailable for this app rather than treated as a backend implementation success. `search.write` remains disabled because no search mutation is required.
+- Current architecture direction: official TIDAL API for browsing/discovery/metadata, HEOS/SR8015 for playback. The remaining critical proof is whether an official-API numeric track ID can be handed to the existing HEOS playback path; this has not yet been tested and must not be assumed.
+
+Runtime search-recon checkpoint:
+
+```text
+050da79 — Add TIDAL search reconnaissance
+```
+
 ## 2026-08-28 — TIDAL Favourite Tracks lifecycle cancellation
 
 - Fixed a separate lifecycle/concurrency problem discovered after the 15-second queue timeout hardening: a long-running `/api/tidal/tracks/play-all` request could remain alive for minutes and continue issuing `aid=3` additions after the user had moved on to another TIDAL playback action.

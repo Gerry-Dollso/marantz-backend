@@ -260,6 +260,27 @@ Prefer teaching Whisper trusted canonical music vocabulary rather than accumulat
 
 Further ASR/microphone tuning is intentionally paused pending arrival of a Seeed Studio ReSpeaker USB Mic Array v2.0. Resume voice tuning on representative hardware rather than the temporary miniDSP UMIK-1.
 
+## Official TIDAL API reconnaissance — 28 Aug 2026
+
+User OAuth Authorization Code + PKCE is proven live with read-only scopes `recommendations.read`, `user.read`, `collection.read` and `search.read`. The reconnaissance session is deliberately RAM-only; access/refresh tokens are never written to Git or disk. A backend restart clears the temporary user session and requires re-authorization.
+
+Live official-API results support a hybrid architecture in which TIDAL OpenAPI supplies fast browsing/discovery/metadata while HEOS/SR8015 remains the playback engine:
+
+- Personal recommendations are proven: My Mix 1-8, My Daily Discovery and My New Arrivals resolve to real playlist resources and numeric TIDAL track IDs.
+- Artist radio is proven from artist relationship to playlist contents.
+- Full user collections are proven through relationship pagination: 393 saved artists, 1,535 saved albums and 634 saved tracks at the test checkpoint. The 634 saved-track count independently matches the HEOS Favourite Tracks collection.
+- Collection page fetches were generally about 120-160 ms before deliberate rate-limit pacing; official API browsing is therefore suitable for first-page render plus background collection fill/cache rather than waiting on multi-second HEOS cold browse.
+- Rich metadata is proven: artist profile artwork, album artwork/artist metadata, and track -> artist + album -> cover art can be resolved through official relationships.
+- Search reconnaissance is implemented and correctly requests `search.read`, but this developer app currently receives `400 Invalid resource ID` for both normal and documented-control queries on root and relationship search forms. One burst also produced a 429. Treat official search as unavailable/access-blocked for this app unless TIDAL enables catalogue-search access; do not enable `search.write` merely to work around it.
+
+Search checkpoint:
+
+```text
+050da79 — Add TIDAL search reconnaissance
+```
+
+Important boundary: official API numeric track IDs have **not yet been proven to interoperate with HEOS playback**. Do not claim the hybrid architecture is playback-complete until a controlled API-ID -> HEOS test succeeds. Such a test changes current playback and must be announced before execution.
+
 ## Rich TIDAL browsing direction
 
 Rich/Roon-like TIDAL UI/backend work can continue while voice development is paused. The Pi now has My Music root navigation, artist sections, playlist/artist queue controls, Now Playing artist/album navigation, full Favourite Tracks browsing, and full-library Play All/Shuffle All backed by the HP cache.
