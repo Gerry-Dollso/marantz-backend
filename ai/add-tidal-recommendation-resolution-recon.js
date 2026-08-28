@@ -18,7 +18,7 @@ const functionAnchor = '  async function probeTrackMetadata(trackId) {';
 const functionAt = source.indexOf(functionAnchor);
 if (functionAt < 0) throw new Error('Expected probeTrackMetadata anchor not found');
 
-const routeAnchor = "    if (pathname === '/api/tidal/oauth/probe-track') {";
+const routeAnchor = "    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe-track') {";
 const routeAt = source.indexOf(routeAnchor);
 if (routeAt < 0) throw new Error('Expected probe-track route anchor not found');
 
@@ -65,7 +65,7 @@ const insertFunction = `  async function probeRecommendationResolutionBatch() {
 source = source.slice(0, functionAt) + insertFunction + source.slice(functionAt);
 
 const newRouteAt = source.indexOf(routeAnchor);
-const insertRoute = `    if (pathname === '/api/tidal/oauth/probe-recommendation-resolution-batch') {
+const insertRoute = `    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe-recommendation-resolution-batch') {
       try {
         return sendJson(res, 200, await probeRecommendationResolutionBatch());
       } catch (error) {
