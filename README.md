@@ -9,7 +9,7 @@ Active deployed/development branch: `local-ai-development`.
 Current tested functional checkpoint:
 
 ```text
-848558a — Harden TIDAL favourite tracks queueing
+4504a08 — Cancel superseded TIDAL favourite queue builds
 ```
 
 The service is deployed at `/opt/marantz-backend` and runs as system service `marantz-backend.service`, HTTP port 3100. HEOS uses TCP 1255. The persistent local Qwen classifier is provided separately by `marantz-ai.service` on `127.0.0.1:8080`.
@@ -109,7 +109,7 @@ bada46d — Fix TIDAL browse cache library CIDs
 
 ## Full TIDAL Favourite Tracks playback
 
-`My Music-Tracks` is now treated as one full saved-track collection rather than a 50-track page for playback purposes. Live HEOS browsing reported **576 favourite tracks** during implementation.
+`My Music-Tracks` is treated as one full saved-track collection rather than a 50-track page for playback purposes. The live collection had grown to **634 favourite tracks** by the 28 Aug cancellation test.
 
 The backend exposes:
 
@@ -124,11 +124,12 @@ The route uses the full cached `My Music-Tracks|all` list, keeps only playable e
 - Queue additions are deliberately sequential rather than concurrent because sequential HEOS command handling has proven reliable.
 - Each `browse/add_to_queue` operation in this full-library builder has a dedicated 15-second HEOS timeout. The normal 5-second `heosBrowse()` default proved too short for some legitimate queue additions.
 - A failed or timed-out favourite is logged and skipped individually; it no longer aborts the entire queue build. The first successful track receives `aid=4`; later successful tracks receive `aid=3`.
-- Playback begins from the first selected track before the whole 576-track queue is finished; the remainder builds quietly behind playback.
+- Playback begins from the first selected track before the whole queue is finished; the remainder builds quietly behind playback.
+- Long Favourite Tracks builds are generation-controlled. Starting a newer TIDAL play, track action or playlist playback supersedes the old build. The newer action waits for the single Favourite Tracks HEOS queue command already in flight to settle, then the old loop exits before issuing another command. A cancelled build does not run its final shuffle-mode operation against the newer playback.
 
-Live diagnosis on 28 Aug 2026 showed that the earlier 5-second timeout produced false `TIDAL FAVOURITE TRACK SKIP` messages and eventually HEOS `eid=12 / syserrno=-2000` errors as commands accumulated. After restarting onto the 15-second per-track timeout, a clean Shuffle All test grew from 9 to 34 queued tracks with zero new skip messages. Preserve the longer timeout locally for this queue builder rather than increasing the global HEOS timeout.
+Live diagnosis on 28 Aug 2026 showed that the earlier 5-second timeout produced false `TIDAL FAVOURITE TRACK SKIP` messages and eventually HEOS `eid=12 / syserrno=-2000` errors as commands accumulated. The 15-second timeout removed those false failures, but a separate lifecycle problem was then found: an abandoned full-library HTTP request could continue adding favourites for minutes and interfere with later playback.
 
-This means Play All and Shuffle All are genuinely full-library operations rather than 50-track-page operations. In live testing, the queue grew beyond the old 50-track ceiling while playback continued normally. Shuffle All produced a random opening sequence (for example Joy Division -> Blue Oyster Cult -> Black Flag) and continued appending the rest in the already-randomised order.
+The lifecycle fix was verified against that exact failure mode. A 634-track Shuffle All build was allowed to begin, then a newer Albums -> Play Random action was issued while it was active. The Favourite Tracks builder cancelled cleanly after 10 queued tracks with **0 skips**, logged `TIDAL FAVOURITE TRACK BUILD CANCELLED`, and did not continue issuing Favourite Tracks commands afterwards. The newer playback action took over without the previous minutes-long command stream.
 
 ### Critical HEOS CID rule
 
@@ -166,6 +167,10 @@ b6e0230 — Fix favourite Tracks HEOS CID handling
 c7f508a — Add per-track failure isolation migration
 96fff02 — Add 15-second queue timeout migration
 848558a — Harden TIDAL favourite tracks queueing
+e7d5ca7 — Add Favourite Tracks cancellation migration
+4c3ef65 — Add Favourite Tracks cancellation drain migration
+ce30dd4 — Fix Favourite Tracks drain migration anchor
+4504a08 — Cancel superseded TIDAL favourite queue builds
 ```
 
 ## TIDAL semantic contract
