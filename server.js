@@ -947,16 +947,33 @@ const server = http.createServer(async (req, res) => {
         });
       }
 
+      const action = String(
+        url.searchParams.get('action') || 'play-only'
+      ).trim();
+      const aidByAction = {
+        'play-now': 1,
+        'play-next': 2,
+        'add-end': 3,
+        'play-only': 4
+      };
+      const aid = aidByAction[action];
+      if (!aid) {
+        return sendJson(res, 400, {
+          ok: false,
+          error: 'Invalid resolved track action'
+        });
+      }
+
       await heosBrowse(
         'heos://browse/add_to_queue?pid=' + encodeURIComponent(PLAYER_ID) +
         '&sid=10&cid=' + encodeURIComponent(resolution.cid) +
         '&mid=' + encodeURIComponent(resolution.mid) +
-        '&aid=4'
+        '&aid=' + aid
       );
 
       return sendJson(res, 200, {
         ok: true,
-        action: 'play-only',
+        action,
         track,
         resolution
       });
