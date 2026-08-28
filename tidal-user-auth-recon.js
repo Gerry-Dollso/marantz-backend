@@ -319,6 +319,29 @@ function createTidalUserAuthRecon(options = {}) {
     );
   }
 
+  async function probePlaylistArtworkAndPage(playlistId, cursor) {
+    const id = String(playlistId || '').trim();
+    if (!/^[a-zA-Z0-9]+$/.test(id)) {
+      throw new Error('Playlist id must be alphanumeric');
+    }
+
+    const pageCursor = String(cursor || '').trim();
+    if (pageCursor && !/^[a-zA-Z0-9_-]+$/.test(pageCursor)) {
+      throw new Error('Playlist cursor contains unsupported characters');
+    }
+
+    let resourcePath =
+      '/playlists/' + encodeURIComponent(id) +
+      '?include=' + encodeURIComponent('items,items.tracks:artists,items.tracks:albums.coverArt') +
+      '&countryCode=' + encodeURIComponent(countryCode);
+
+    if (pageCursor) {
+      resourcePath += '&page%5Bcursor%5D=' + encodeURIComponent(pageCursor);
+    }
+
+    return apiGetRaw(resourcePath);
+  }
+
   async function probeRecommendations() {
     const resources = [
       ['dailyMixes', '/userDailyMixes/me?include=items&countryCode=' + encodeURIComponent(countryCode)],
@@ -953,6 +976,17 @@ async function probeSearch() {
       try {
         const playlistId = requestUrl.searchParams.get('id') || '';
         const playlist = await probeRichPlaylist(playlistId);
+        return sendJson(res, 200, { ok: true, playlist });
+      } catch (error) {
+        return sendJson(res, 400, { ok: false, error: error.message });
+      }
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe-playlist-page') {
+      try {
+        const playlistId = requestUrl.searchParams.get('id') || '';
+        const cursor = requestUrl.searchParams.get('cursor') || '';
+        const playlist = await probePlaylistArtworkAndPage(playlistId, cursor);
         return sendJson(res, 200, { ok: true, playlist });
       } catch (error) {
         return sendJson(res, 400, { ok: false, error: error.message });
