@@ -17,6 +17,7 @@ function replaceOnce(before, after, label) {
 replaceOnce(
 `let tidalQueueGeneration = 0;
 const voiceAliases = createVoiceAliasStore();
+
 function supersedeTidalQueueBuild() {
   tidalQueueGeneration += 1;
   return tidalQueueGeneration;
@@ -28,6 +29,7 @@ function tidalQueueBuildIsCurrent(generation) {
 `let tidalQueueGeneration = 0;
 let tidalFavouriteQueueCommand = null;
 const voiceAliases = createVoiceAliasStore();
+
 function supersedeTidalQueueBuild() {
   tidalQueueGeneration += 1;
   return tidalQueueGeneration;
