@@ -2,6 +2,31 @@
 
 This file records project-level milestones and known-good checkpoints. Git history remains the detailed source for individual code changes.
 
+## 2026-08-28 — TIDAL Favourite Tracks lifecycle cancellation
+
+- Fixed a separate lifecycle/concurrency problem discovered after the 15-second queue timeout hardening: a long-running `/api/tidal/tracks/play-all` request could remain alive for minutes and continue issuing `aid=3` additions after the user had moved on to another TIDAL playback action.
+- Added generation-controlled cancellation for Favourite Tracks queue builds. A newer Favourite Tracks build or newer TIDAL play/track-action/playlist playback invalidates the previous generation.
+- The Favourite Tracks loop checks its generation before each HEOS addition and again after an in-flight addition completes, then exits cleanly when superseded.
+- Added in-flight queue-command draining. A newer playback action waits for the single Favourite Tracks HEOS command already in progress to settle before issuing its own queue mutation, preventing the old and new operations from racing on HEOS.
+- Cancelled Favourite Tracks builds return a clean cancellation result and do not run the old build's final shuffle-mode command against the newer playback.
+- Live regression test used the then-current **634-track** Favourite Tracks collection. Shuffle All was started and allowed to build for roughly 10 seconds, then Albums -> Play Random was issued. The old builder logged `TIDAL FAVOURITE TRACK BUILD CANCELLED` after **10 queued tracks, 0 skips**, and no continuing Favourite Tracks command/error stream appeared afterwards.
+- This directly fixes the earlier failure mode where a stale Favourite Tracks builder produced minutes of HEOS `eid=12 / syserrno=-2000` interference with later playback.
+
+Current tested backend checkpoint:
+
+```text
+4504a08 — Cancel superseded TIDAL favourite queue builds
+```
+
+Migration/checkpoint sequence:
+
+```text
+e7d5ca7 — Add Favourite Tracks cancellation migration
+4c3ef65 — Add Favourite Tracks cancellation drain migration
+ce30dd4 — Fix Favourite Tracks drain migration anchor
+4504a08 — Cancel superseded TIDAL favourite queue builds
+```
+
 ## 2026-08-28 — TIDAL Favourite Tracks queue hardening
 
 - Diagnosed the apparent unavailable-favourite problem as HEOS command latency rather than a catalogue problem. The shared `heosBrowse()` default is 5 seconds, but legitimate `browse/add_to_queue` operations can take longer.
@@ -11,7 +36,7 @@ This file records project-level milestones and known-good checkpoints. Git histo
 - Clean live Shuffle All verification after service restart grew the queue from 9 to 34 tracks with zero new skip messages.
 - Sequential background queue construction remains intentional; do not replace it with concurrent bursts.
 
-Current tested backend checkpoint:
+Tested backend checkpoint at this stage:
 
 ```text
 848558a — Harden TIDAL favourite tracks queueing
@@ -47,7 +72,7 @@ b6e0230 — Fix favourite Tracks HEOS CID handling
 51c3135 — Add full TIDAL favourite tracks playback
 ```
 
-Current tested backend checkpoint:
+Tested backend checkpoint at this stage:
 
 ```text
 51c3135 — Add full TIDAL favourite tracks playback
