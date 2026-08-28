@@ -1268,7 +1268,8 @@ async function probeSearch() {
 
   return {
     handle,
-    getTrackMetadata: probeTrackMetadata
+    getTrackMetadata: probeTrackMetadata,
+    getPersonalisedPlaylist
   };
 }
 
