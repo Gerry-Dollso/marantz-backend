@@ -142,6 +142,19 @@ function trackMatches(item, target) {
   return true;
 }
 
+function summariseTracks(tracks) {
+  return tracks
+    .filter(item => item?.mid)
+    .slice(0, 30)
+    .map(item => ({
+      name: String(item.name || ''),
+      artist: String(item.artist || ''),
+      album: String(item.album || ''),
+      mid: String(item.mid || ''),
+      playable: item.playable === 'yes'
+    }));
+}
+
 function albumTitleScore(candidate, target) {
   const a = normalise(candidate);
   const b = normalise(target);
@@ -153,10 +166,36 @@ function albumTitleScore(candidate, target) {
   return 0;
 }
 
+function chooseTrack(matches, target) {
+  if (matches.length === 1) return { match: matches[0], method: 'exact-title' };
+  if (matches.length > 1 && target.officialTrackId) {
+    const sameMid = matches.filter(item => String(item.mid || '') === target.officialTrackId);
+    if (sameMid.length === 1) return { match: sameMid[0], method: 'official-mid' };
+  }
+  return null;
+}
+
 const artistCache = new Map();
 const artistAlbumsCache = new Map();
 
-async function exactArtistCid(target) {
+async function resolveArtistCid(target, evidence) {
+  if (target.artistId) {
+    const directCid = 'LIBARTIST-' + target.artistId;
+    try {
+      const root = await heosBrowse(
+        'heos://browse/browse?sid=' + TIDAL_SID + '&cid=' + encodeURIComponent(directCid)
+      );
+      const payload = root.payload || [];
+      if (payload.length) {
+        evidence.push({ stage: 'direct-artist-id', cid: directCid, items: payload.length });
+        return { name: target.artist, cid: directCid, method: 'direct-artist-id' };
+      }
+      evidence.push({ stage: 'direct-artist-id', cid: directCid, items: 0 });
+    } catch (error) {
+      evidence.push({ stage: 'direct-artist-id', cid: directCid, error: error.message });
+    }
+  }
+
   const key = normalise(target.artist);
   if (artistCache.has(key)) return artistCache.get(key);
 
@@ -165,10 +204,11 @@ async function exactArtistCid(target) {
   );
   const exact = (response.payload || [])
     .filter(item => item.cid && normalise(item.name) === key)
-    .map(item => ({ name: String(item.name || ''), cid: String(item.cid) }));
+    .map(item => ({ name: String(item.name || ''), cid: String(item.cid), method: 'exact-artist-search' }));
   const unique = [...new Map(exact.map(item => [item.cid, item])).values()];
   const result = unique.length === 1 ? unique[0] : null;
   artistCache.set(key, result);
+  if (result) evidence.push({ stage: 'artist-search', name: result.name, cid: result.cid });
   return result;
 }
 
@@ -232,15 +272,22 @@ async function resolveOne(target) {
     try {
       const tracks = await browseAlbumTracks(directCid);
       const matches = tracks.filter(item => trackMatches(item, target));
-      evidence.push({ stage: 'direct-album-id', cid: directCid, tracks: tracks.length, matches: matches.length });
-      if (matches.length === 1) {
+      evidence.push({
+        stage: 'direct-album-id',
+        cid: directCid,
+        tracks: tracks.length,
+        matches: matches.length,
+        trackList: matches.length === 1 ? undefined : summariseTracks(tracks)
+      });
+      const chosen = chooseTrack(matches, target);
+      if (chosen) {
         return {
           status: 'resolved',
-          method: 'direct-album-id',
+          method: chosen.method === 'official-mid' ? 'direct-album-id+official-mid' : 'direct-album-id',
           confidence: 'exact',
           cid: directCid,
-          mid: String(matches[0].mid),
-          heosAlbum: String(matches[0].album || target.album || ''),
+          mid: String(chosen.match.mid),
+          heosAlbum: String(chosen.match.album || target.album || ''),
           evidence
         };
       }
@@ -253,11 +300,10 @@ async function resolveOne(target) {
     return { status: 'unresolved', reason: 'official metadata has no artist name', evidence };
   }
 
-  const artist = await exactArtistCid(target);
+  const artist = await resolveArtistCid(target, evidence);
   if (!artist) {
-    return { status: 'unresolved', reason: 'no unique exact HEOS artist match', evidence };
+    return { status: 'unresolved', reason: 'no safe HEOS artist resolution', evidence };
   }
-  evidence.push({ stage: 'artist', name: artist.name, cid: artist.cid });
 
   const albums = await getArtistAlbumCandidates(artist.cid);
   const ranked = albums
@@ -266,6 +312,11 @@ async function resolveOne(target) {
     .sort((a, b) => b.score - a.score);
 
   if (!ranked.length) {
+    evidence.push({
+      stage: 'artist-album-list',
+      artistCid: artist.cid,
+      albums: albums.slice(0, 80).map(item => ({ name: item.name, cid: item.cid }))
+    });
     return { status: 'unresolved', reason: 'no HEOS album-title candidate', evidence };
   }
 
@@ -283,7 +334,8 @@ async function resolveOne(target) {
         cid: album.cid,
         score: album.score,
         tracks: tracks.length,
-        matches: trackMatchesInAlbum.length
+        matches: trackMatchesInAlbum.length,
+        trackList: trackMatchesInAlbum.length === 1 ? undefined : summariseTracks(tracks)
       });
       for (const track of trackMatchesInAlbum) {
         matches.push({ album, track });
@@ -309,6 +361,19 @@ async function resolveOne(target) {
   }
 
   if (unique.length > 1) {
+    const sameMid = unique.filter(match => String(match.track.mid || '') === target.officialTrackId);
+    if (sameMid.length === 1) {
+      const match = sameMid[0];
+      return {
+        status: 'resolved',
+        method: 'artist-album-track+official-mid',
+        confidence: 'exact',
+        cid: match.album.cid,
+        mid: String(match.track.mid),
+        heosAlbum: match.album.name,
+        evidence
+      };
+    }
     return {
       status: 'ambiguous',
       reason: 'multiple HEOS album/track matches',
