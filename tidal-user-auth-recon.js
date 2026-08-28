@@ -306,6 +306,19 @@ function createTidalUserAuthRecon(options = {}) {
     );
   }
 
+  async function probeRichPlaylist(playlistId) {
+    const id = String(playlistId || '').trim();
+    if (!/^[a-zA-Z0-9]+$/.test(id)) {
+      throw new Error('Playlist id must be alphanumeric');
+    }
+
+    return apiGetRaw(
+      '/playlists/' + encodeURIComponent(id) +
+      '?include=' + encodeURIComponent('items,items.tracks:artists,items.tracks:albums') +
+      '&countryCode=' + encodeURIComponent(countryCode)
+    );
+  }
+
   async function probeRecommendations() {
     const resources = [
       ['dailyMixes', '/userDailyMixes/me?include=items&countryCode=' + encodeURIComponent(countryCode)],
@@ -930,6 +943,16 @@ async function probeSearch() {
       try {
         const playlistId = requestUrl.searchParams.get('id') || '';
         const playlist = await probeRawPlaylist(playlistId);
+        return sendJson(res, 200, { ok: true, playlist });
+      } catch (error) {
+        return sendJson(res, 400, { ok: false, error: error.message });
+      }
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe-playlist-rich') {
+      try {
+        const playlistId = requestUrl.searchParams.get('id') || '';
+        const playlist = await probeRichPlaylist(playlistId);
         return sendJson(res, 200, { ok: true, playlist });
       } catch (error) {
         return sendJson(res, 400, { ok: false, error: error.message });
