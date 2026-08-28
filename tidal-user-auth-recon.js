@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const fs = require('fs');
 
 const AUTHORIZE_URL = 'https://login.tidal.com/authorize';
 const TOKEN_URL = 'https://auth.tidal.com/v1/oauth2/token';
@@ -8,6 +9,7 @@ const API_BASE = 'https://openapi.tidal.com/v2';
 const DEFAULT_REDIRECT_URI = 'http://192.168.50.145:3100/api/tidal/oauth/callback';
 const DEFAULT_SCOPES = ['recommendations.read', 'user.read', 'collection.read', 'search.read'];
 const PENDING_AUTH_TTL_MS = 10 * 60 * 1000;
+const DEFAULT_REFRESH_TOKEN_FILE = '/etc/marantz-backend/tidal-refresh-token'; // TIDAL_PERSISTENT_REFRESH_AUTH_V1
 
 function base64Url(buffer) {
   return buffer
@@ -103,6 +105,36 @@ function createTidalUserAuthRecon(options = {}) {
 
   let pendingAuth = null;
   let session = null;
+  let refreshInFlight = null;
+  const refreshTokenFile = String(
+    options.refreshTokenFile || process.env.TIDAL_REFRESH_TOKEN_FILE || DEFAULT_REFRESH_TOKEN_FILE
+  ).trim();
+
+  function loadRefreshToken() {
+    try {
+      return fs.readFileSync(refreshTokenFile, 'utf8').trim();
+    } catch (error) {
+      if (error.code === 'ENOENT') return '';
+      throw error;
+    }
+  }
+
+  function persistRefreshToken(refreshToken) {
+    const token = String(refreshToken || '').trim();
+    if (!token) return;
+    fs.writeFileSync(refreshTokenFile, token + '\n', { mode: 0o600 });
+    fs.chmodSync(refreshTokenFile, 0o600);
+  }
+
+  function clearPersistedRefreshToken() {
+    try {
+      fs.writeFileSync(refreshTokenFile, '', { mode: 0o600 });
+      fs.chmodSync(refreshTokenFile, 0o600);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+  }
+
 
   function assertConfigured() {
     if (!clientId) {
@@ -145,13 +177,64 @@ function createTidalUserAuthRecon(options = {}) {
     };
   }
 
+  async function exchangeRefreshToken(refreshToken) {
+    const response = await fetch(TOKEN_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Accept: 'application/json'
+      },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: clientId,
+        refresh_token: refreshToken
+      })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.access_token) {
+      const detail = payload.error_description || payload.error || ('HTTP ' + response.status);
+      throw new Error('TIDAL refresh-token exchange failed: ' + detail);
+    }
+    const expiresIn = Math.max(60, Number(payload.expires_in) || 86400);
+    return {
+      accessToken: String(payload.access_token),
+      refreshToken: String(payload.refresh_token || refreshToken),
+      tokenType: String(payload.token_type || 'Bearer'),
+      scope: String(payload.scope || ''),
+      expiresAt: Date.now() + expiresIn * 1000
+    };
+  }
+
+  async function ensureSession() {
+    if (session?.accessToken && Date.now() < session.expiresAt - 60000) return session;
+    if (refreshInFlight) return refreshInFlight;
+    refreshInFlight = (async () => {
+      const refreshToken = session?.refreshToken || loadRefreshToken();
+      if (!refreshToken) {
+        throw new Error('TIDAL user authorization has not been completed');
+      }
+      try {
+        const refreshed = await exchangeRefreshToken(refreshToken);
+        session = refreshed;
+        persistRefreshToken(refreshed.refreshToken);
+        return session;
+      } catch (error) {
+        if (/invalid_grant|invalid refresh|expired|revoked/i.test(String(error.message || ''))) {
+          clearPersistedRefreshToken();
+          session = null;
+        }
+        throw error;
+      }
+    })();
+    try {
+      return await refreshInFlight;
+    } finally {
+      refreshInFlight = null;
+    }
+  }
+
   async function apiGet(path) {
-    if (!session?.accessToken) {
-      throw new Error('TIDAL user authorization has not been completed');
-    }
-    if (Date.now() >= session.expiresAt) {
-      throw new Error('TIDAL user access token has expired; authorize again');
-    }
+    await ensureSession();
 
     const response = await fetch(`${API_BASE}${path}`, {
       headers: {
@@ -242,12 +325,7 @@ function createTidalUserAuthRecon(options = {}) {
   }
 
   async function inspectCollectionResource(path) {
-    if (!session?.accessToken) {
-      throw new Error('TIDAL user authorization has not been completed');
-    }
-    if (Date.now() >= session.expiresAt) {
-      throw new Error('TIDAL user access token has expired; authorize again');
-    }
+    await ensureSession();
 
     const startedAt = process.hrtime.bigint();
     const response = await fetch(API_BASE + path, {
@@ -308,12 +386,7 @@ function createTidalUserAuthRecon(options = {}) {
   }
 
   async function probeCollectionPagination() {
-    if (!session?.accessToken) {
-      throw new Error('TIDAL user authorization has not been completed');
-    }
-    if (Date.now() >= session.expiresAt) {
-      throw new Error('TIDAL user access token has expired; authorize again');
-    }
+    await ensureSession();
 
     const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     const pageDelayMs = 1000;
@@ -411,12 +484,7 @@ function createTidalUserAuthRecon(options = {}) {
   }
 
   async function probeRichMetadata() {
-    if (!session?.accessToken) {
-      throw new Error('TIDAL user authorization has not been completed');
-    }
-    if (Date.now() >= session.expiresAt) {
-      throw new Error('TIDAL user access token has expired; authorize again');
-    }
+    await ensureSession();
 
     async function inspect(label, resourcePath) {
       const startedAt = process.hrtime.bigint();
@@ -465,13 +533,60 @@ function createTidalUserAuthRecon(options = {}) {
   }
 
 
+  async function probeRecommendationResolutionBatch() {
+    // This endpoint intentionally stops at official TIDAL metadata. The HEOS
+    // catalogue half is driven separately from the shell so every browse step
+    // and candidate match remains visible during reconnaissance.
+    const playlists = await probePersonalisedPlaylists();
+    const selected = [];
+
+    for (const [label, playlist] of Object.entries(playlists.playlists || {})) {
+      if (!playlist?.ok) continue;
+      const tracks = (playlist.included || [])
+        .filter(item => item?.type === 'tracks' && /^\d+$/.test(String(item.id || '')))
+        .slice(0, label === 'My Mix 1' ? 10 : 8);
+      for (const track of tracks) {
+        selected.push({ source: label, id: String(track.id) });
+      }
+    }
+
+    const unique = [];
+    const seen = new Set();
+    for (const item of selected) {
+      if (seen.has(item.id)) continue;
+      seen.add(item.id);
+      unique.push(item);
+      if (unique.length >= 26) break;
+    }
+
+    const results = [];
+    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms)); // TIDAL_RECOMMENDATION_RECON_PACING_V1
+    for (const item of unique) {
+      let lastError = null;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        if (results.length > 0 || attempt > 0) {
+          await sleep(attempt > 0 ? 2500 : 1000);
+        }
+        try {
+          const metadata = await probeTrackMetadata(item.id);
+          results.push({ source: item.source, id: item.id, ok: true, metadata });
+          lastError = null;
+          break;
+        } catch (error) {
+          lastError = error;
+          if (!/HTTP 429/i.test(String(error.message || ''))) break;
+        }
+      }
+      if (lastError) {
+        results.push({ source: item.source, id: item.id, ok: false, error: lastError.message });
+      }
+    }
+
+    return { count: results.length, tracks: results };
+  }
+
   async function probeTrackMetadata(trackId) {
-    if (!session?.accessToken) {
-      throw new Error('TIDAL user authorization has not been completed');
-    }
-    if (Date.now() >= session.expiresAt) {
-      throw new Error('TIDAL user access token has expired; authorize again');
-    }
+    await ensureSession(); // TIDAL_PERSISTENT_REFRESH_AUTH_V3
     if (!/^\d+$/.test(trackId || '')) {
       throw new Error('Track id must contain digits only');
     }
@@ -494,12 +609,7 @@ function createTidalUserAuthRecon(options = {}) {
     return payload;
   }
 async function probeSearch() {
-    if (!session?.accessToken) {
-      throw new Error('TIDAL user authorization has not been completed');
-    }
-    if (Date.now() >= session.expiresAt) {
-      throw new Error('TIDAL user access token has expired; authorize again');
-    }
+    await ensureSession();
 
     async function inspectSearch(label, path) {
       const startedAt = process.hrtime.bigint();
@@ -644,6 +754,7 @@ async function probeSearch() {
         const verifier = pendingAuth.verifier;
         pendingAuth = null;
         session = await exchangeCode(code, verifier);
+        persistRefreshToken(session.refreshToken);
 
         console.log(
           'TIDAL USER AUTHORIZED:',
@@ -659,7 +770,7 @@ async function probeSearch() {
           res,
           200,
           'TIDAL authorization succeeded',
-          'MarantzPi now has a temporary in-memory user session for API reconnaissance. No token has been displayed or written to Git. Return to Termius.'
+          'MarantzPi is authorized. The refresh token is stored securely outside Git so authorization can survive backend restarts. Return to Termius.'
         );
       } catch (error) {
         console.error('TIDAL USER AUTH FAILED:', error.message);
@@ -668,7 +779,24 @@ async function probeSearch() {
       return true;
     }
 
+    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/refresh') {
+      try {
+        await ensureSession();
+        return sendJson(res, 200, {
+          ok: true,
+          authorized: true,
+          expiresAt: new Date(session.expiresAt).toISOString(),
+          tokenScope: session.scope || '',
+          refreshTokenStored: Boolean(loadRefreshToken())
+        });
+      } catch (error) {
+        return sendJson(res, 401, { ok: false, authorized: false, error: error.message });
+      }
+    }
+
     if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/status') {
+      // TIDAL_PERSISTENT_REFRESH_AUTH_V2
+      try { await ensureSession(); } catch {}
       return sendJson(res, 200, {
         ok: true,
         configured: Boolean(clientId),
@@ -682,7 +810,8 @@ async function probeSearch() {
           ? new Date(session.expiresAt).toISOString()
           : null,
         tokenScope: session?.scope || '',
-        refreshTokenReceived: Boolean(session?.refreshToken)
+        refreshTokenReceived: Boolean(session?.refreshToken),
+        refreshTokenStored: Boolean(loadRefreshToken())
       });
     }
 
@@ -692,6 +821,14 @@ async function probeSearch() {
         return sendJson(res, 200, { ok: true, search });
       } catch (error) {
         return sendJson(res, 401, { ok: false, error: error.message });
+      }
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe-recommendation-resolution-batch') {
+      try {
+        return sendJson(res, 200, await probeRecommendationResolutionBatch());
+      } catch (error) {
+        return sendJson(res, 500, { ok: false, error: error.message });
       }
     }
 
