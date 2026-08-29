@@ -14,6 +14,7 @@ const functionMarker = `  async function probeTrackMetadata(trackId) {
     if (!/^\\d+$/.test(trackId || '')) {
       throw new Error('Track id must contain digits only');
     }
+
     const response = await fetch(
       API_BASE + '/tracks/' + encodeURIComponent(trackId) +
         '?include=artists,albums,albums.coverArt&countryCode=' + encodeURIComponent(countryCode),
