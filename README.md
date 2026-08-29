@@ -1,5 +1,14 @@
 # marantz-backend
 
+<!-- TIDAL_BIRTHDAY_HANDOVER_2026_08_29 -->
+## Active handover — 29 Aug 2026
+
+Before further TIDAL/HEOS reconnaissance, read [CURRENT_HANDOVER.md](CURRENT_HANDOVER.md). It records the active personalised-playlist Play All investigation, the proven Sugarcubes **Birthday** catalogue-replacement evidence, tests that must not be repeated, and the separate 52-second queue-resolution performance problem.
+
+Critical current rule: the active hard case is **The Sugarcubes — Birthday**, official personalised track `34454218`, with strong consumer/HEOS evidence selecting playable track `341262056` / album `341262049`. The user's **Early Alternative** playlist has already been browsed through HEOS and already proves that exact MID/album/artwork combination. Do not re-test whether that playlist exists or is HEOS-visible. Interpol was a previous search/control artist and is not the active replacement case.
+
+Current architecture remains: **official TIDAL API for what the user sees; HEOS for what the user hears**. Do not regress new frontend/catalogue work back to HEOS browsing.
+
 Companion media/orchestration backend for marantzPI. It runs on the HP EliteDesk media server and exposes HEOS/TIDAL library operations plus validated semantic control used by the Raspberry Pi touchscreen and voice listener.
 
 ## Current known-good state — 28 Aug 2026
@@ -343,3 +352,93 @@ This repository is only for the marantzPI / HP backend system. Unrelated compute
 ## Housekeeping
 
 Temporary `server.js.before-*`, `server.js.phase-*`, `*.backup-*`, logs and environment files are ignored. One-off hard-coded diagnostic scripts should not be retained when equivalent tests can be run directly during troubleshooting.
+
+
+<!-- TIDAL_PERSONALISED_HANDOVER_2026_08_29 -->
+## TIDAL personalised playback — current handover, 29 Aug 2026
+
+This is the active TIDAL investigation. Do not restart earlier HEOS capability tests or substitute unrelated control tracks. The hard case is **The Sugarcubes - Birthday** from **My Mix 1**.
+
+### Production direction
+
+The intended architecture remains:
+
+```text
+Official TIDAL API = frontend/catalogue/discovery/metadata
+        -> HP resolver/bridge
+        -> HEOS = playback transport only
+        -> SR8015
+```
+
+Shorthand: **TIDAL for what you see; HEOS for what you hear.** HEOS browsing should not become the new frontend/catalogue layer again. The generic official-TIDAL queue machinery should eventually underpin Play All, Shuffle All and Play From Here, and later My Music/playlist/collection migration.
+
+### Personalised browse and track actions already proven
+
+Official personalised endpoints and the Pi My Mixes UI are already working. My Mix 1-8, My Daily Discovery and My New Arrivals are visible from the official API. My Mix track Play Now, Play Next, Add to End and Play Only have been proven through the official-ID -> resolver -> HEOS path. Play From Here is intentionally blocked for My Mixes until the generic playlist-tail queue builder exists.
+
+Do **not** re-test whether ordinary TIDAL user playlists are visible through HEOS: this is already proven. The user playlist **Early Alternative** is visible at HEOS CID `LIBPLAYLIST-d36d23dd-83d0-4312-9958-986b3964ec84`.
+
+### Resolved personalised Play All / Shuffle All prototype
+
+The backend currently has `GET /api/tidal/personalised/playlist/play?id=<id>&shuffle=0|1`. It pre-resolves every official track before touching the queue, then uses HEOS `aid=4` for the first resolved item and `aid=3` for the remainder, with generation cancellation.
+
+The first live My Mix 1 Play All test **failed safely after about 52.3 seconds without changing playback**. It stopped at index 31 on The Sugarcubes - Birthday because the resolver correctly returned ambiguity. This exposed two separate problems:
+
+1. Catalogue identity/replacement: the personalised API can expose an older/non-streaming catalogue object while TIDAL's consumer playback uses another playable edition.
+2. Performance: pre-resolving an entire playlist through sequential live HEOS album browses is too slow. Even after identity is solved, a roughly 52-second pre-resolution delay is unacceptable.
+
+Do not treat the 52-second result as a software regression. It is the current design limitation being investigated.
+
+### Birthday evidence — preserve these exact identifiers
+
+The My Mix 1 official API item is:
+
+```text
+The Sugarcubes - Birthday
+official track: 34454218
+official album: 34454215
+artist:         3519103
+ISRC:           USEE18800001
+duration:       PT4M
+availability:   no STREAM field advertised in the probe
+```
+
+This is a genuine TIDAL object; the 8-digit ID is not a parsing mistake. Its album is Life's Too Good, barcode `603497981250`.
+
+HEOS exposes at least two same-title playable album editions:
+
+```text
+LIBALBUM-341262049 -> Birthday MID 341262056
+LIBALBUM-526377759 -> Birthday MID 526377765
+```
+
+Official probes show both are genuine TIDAL objects and both advertise `STREAM,DJ` availability, but they have different ISRCs. Therefore ISRC does not solve this case:
+
+```text
+341262056 / album 341262049 / ISRC GBBTF9200071 / 3:59 / STREAM,DJ
+526377765 / album 526377759 / ISRC ISC108800503 / 3:59 / STREAM,DJ
+```
+
+The important evidence selecting **341262056 / 341262049** is independent and repeated:
+
+- Playing the exact Birthday item from My Mix 1 in the official Android TIDAL app and using Share produced TIDAL track ID **341262056**.
+- Sending that exact My Mix item to the SR8015 through TIDAL Connect made HEOS Now Playing use artwork path `4fe177f8/64f1/4b2b/8db7/92c43cb3a5fa`, exactly matching official album **341262049**. TIDAL Connect itself exposed placeholder `mid=1` / `album_id=1`, so the artwork proves the album edition; the Share result supplies the exact track ID.
+- Browsing the user's existing ordinary TIDAL playlist **Early Alternative** through HEOS returned Birthday with **MID 341262056**, **album_id 341262049**, and the same `4fe177f8...` artwork.
+
+Therefore three independent consumer/playback observations converge on 341262056/341262049. Do not go back to proving that Early Alternative exists or that Birthday is in it; those facts are established.
+
+A separate read-only queue check during TIDAL Connect showed the pre-existing normal HEOS queue unchanged. TIDAL Connect was a transient station-style playback session and did not replace that stored queue.
+
+### Active replacement investigation
+
+The current hypothesis is that the personalised API stores/returns catalogue object `34454218`, while TIDAL consumer playback substitutes a currently streamable equivalent, here `341262056`. This is strongly supported by the observations above but must not be promoted to a general resolver rule until the API mechanism is proven.
+
+The next useful question is specifically whether the official TIDAL API exposes the substitution through its media-replacement facilities (for example a `replacement` relationship or `replaceMedia` behaviour). Do not invent fuzzy tie-breakers such as newest, oldest or arbitrary popularity while this deterministic avenue remains under investigation.
+
+The first guarded migration `ai/add-tidal-replacement-probe.js` was committed as `777e2d8` but its anchor was too brittle and it **failed safely before modifying `tidal-user-auth-recon.js`** with `Expected probeTrackMetadata anchor exactly once; found 0`. At that point `git diff` was clean.
+
+A later chat then made **uncommitted local reconnaissance edits** to `tidal-user-auth-recon.js` adding probes for playlist `replaceMedia`, track provenance/providers/owners, and track shares. These edits must be reviewed before commit; do not assume they are accepted production code. The playlist `replaceMedia` probe is directly relevant to the active replacement question, while provenance/shares are exploratory and should not distract from the Birthday replacement test.
+
+### Queue design after identity investigation
+
+The likely production direction, not yet implemented, is to avoid blocking playback on full-playlist pre-resolution: resolve/start the first safe playable item promptly with `aid=4`, then resolve and append remaining items in the background with `aid=3`, retaining generation cancellation and safely skipping unresolved/ambiguous items rather than guessing. This machinery should be generic enough for Play All, Shuffle All and Play From Here.

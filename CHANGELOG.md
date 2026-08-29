@@ -1,5 +1,34 @@
 # Changelog
 
+
+## 2026-08-29 — Personalised TIDAL playback and Birthday replacement investigation
+
+- Proved the official personalised My Mix UI and per-track resolved playback path on the Pi; Play Now, Play Next, Add to End and Play Only work. Play From Here remains deliberately unavailable for My Mixes pending a generic queue-tail builder.
+- Added the first generic resolved personalised playlist Play All/Shuffle All backend path. Its first live My Mix 1 Play All test failed safely after about **52.3 seconds**, before queue mutation, on The Sugarcubes - Birthday at index 31 because the resolver returned a genuine catalogue ambiguity.
+- Identified the performance limitation independently of the identity problem: the prototype pre-resolves every track sequentially and the resolver performs live HEOS album browsing even on its direct path. Full-playlist pre-resolution is therefore too slow for production.
+- Established the Birthday identity discrepancy precisely. My Mix 1 exposes official track `34454218` / album `34454215` / ISRC `USEE18800001`, while two HEOS-visible Life's Too Good editions contain Birthday as `341262056` / album `341262049` and `526377765` / album `526377759`.
+- Proved both HEOS candidates are genuine official TIDAL objects with STREAM availability and different ISRCs, so ISRC cannot identify the consumer-selected replacement in this case.
+- Obtained three converging pieces of evidence for `341262056` / `341262049`: the official Android TIDAL Share action on the exact My Mix item returned track `341262056`; TIDAL Connect to the SR8015 used the exact artwork of album `341262049`; and the user's pre-existing Early Alternative TIDAL playlist appears through HEOS with Birthday MID `341262056`, album_id `341262049`, and the same artwork.
+- TIDAL Connect exposed placeholder `mid=1` / `album_id=1` and left the normal stored HEOS queue intact, confirming that the Connect session cannot itself be used as a direct MID lookup.
+- Current deterministic investigation: test whether official TIDAL media replacement functionality can expose the mapping from stored personalised object `34454218` to the consumer-playable object. Do not fall back to arbitrary fuzzy/newest/oldest selection without evidence.
+- Guarded replacement-probe migration commit `777e2d8` failed safely because its source anchor matched zero times; it made no runtime-file change. Subsequent uncommitted local reconnaissance added `replaceMedia`, provenance and shares probes to `tidal-user-auth-recon.js`; review those edits before committing them.
+- Do not repeat established HEOS playlist discovery. Early Alternative is already proven at `LIBPLAYLIST-d36d23dd-83d0-4312-9958-986b3964ec84` and contains Birthday as MID `341262056` / album `341262049`.
+
+<!-- TIDAL_BIRTHDAY_HANDOVER_2026_08_29 -->
+## 2026-08-29 — Personalised queue hard case and TIDAL replacement investigation
+
+- Added production personalised playlist playback at `a30db56`: official playlist tracks are resolved to HEOS context before queue mutation, first successful item uses `aid=4`, later items use `aid=3`, and ambiguity fails closed.
+- Live My Mix 1 Play All exposed two distinct issues. Full pre-resolution took about **52.326 seconds**, which is not acceptable for production UX, and the build failed safely at index 31 on The Sugarcubes — **Birthday** without changing playback.
+- The developer API My Mix object is track `34454218`, album `34454215`, artist `3519103`, ISRC `USEE18800001`, duration `PT4M`. Direct official probing proved it is a genuine TIDAL resource but the observed response did not advertise STREAM availability.
+- HEOS exposes two playable same-title/same-album candidates: `341262056` / album `341262049` and `526377765` / album `526377759`. Both are genuine official resources with STREAM availability but different ISRC/licensing metadata, proving ISRC cannot be used as a universal equivalence key.
+- The official Android TIDAL app's Share action on the exact My Mix Birthday item returned track **341262056**. Sending the same item through TIDAL Connect produced album artwork exactly matching official album **341262049**. Connect itself reports placeholder `mid=1` / `album_id=1`, so Share supplies the exact track identity while Connect independently confirms the selected album edition.
+- Independently browsed the user's existing **Early Alternative** playlist through HEOS. Birthday is already present there as MID **341262056**, album_id **341262049**, with the same artwork. This closes the question of whether the playlist is HEOS-visible and which edition it contains; do not repeat that reconnaissance.
+- TIDAL Connect queue inspection showed the Connect session is transient/station-style and did not replace the existing normal HEOS queue.
+- The active investigation is now whether official TIDAL APIs expose a deterministic replacement/media-substitution mapping from personalised object `34454218` to playable object `341262056`. Prefer TIDAL's own replacement semantics if accessible; do not choose among editions by arbitrary fuzzy tie-breakers.
+- The first guarded replacement-probe migration failed safely because its exact anchor did not match and wrote nothing. Subsequent 29 Aug commits added read-only replacement/replaceMedia/metadata/provenance/shares reconnaissance helpers. Inspect their live results before creating further probes.
+- Queue latency remains a separate problem even if replacement identity is solved: the reusable resolver performs live HEOS browsing on many tracks, so whole-playlist pre-resolution can take tens of seconds. Future generic Play All/Shuffle All/Play From Here machinery should start a safely resolved first item promptly and continue building in the background while retaining cancellation/fail-safe behaviour.
+- Added `CURRENT_HANDOVER.md` as the short authoritative continuation document so a new chat does not restart closed investigations.
+
 This file records project-level milestones and known-good checkpoints. Git history remains the detailed source for individual code changes.
 
 ## 2026-08-28 — HEOS resolver normalization and second-sample validation
