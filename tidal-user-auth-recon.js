@@ -777,6 +777,18 @@ function createTidalUserAuthRecon(options = {}) {
     return results;
   }
 
+  async function probeArtistMetadata(artistId) {
+    if (!/^\d+$/.test(artistId || '')) {
+      throw new Error('Artist id must contain digits only');
+    }
+
+    return apiGetRaw(
+      '/artists/' + encodeURIComponent(artistId) +
+      '?include=' + encodeURIComponent('profileArt') +
+      '&countryCode=' + encodeURIComponent(countryCode)
+    );
+  }
+
   async function probeRichMetadata() {
     await ensureSession();
 
@@ -1153,6 +1165,16 @@ async function probeSearch() {
         const trackId = requestUrl.searchParams.get('id') || '';
         const track = await probeTrackReplacement(trackId);
         return sendJson(res, 200, { ok: true, track });
+      } catch (error) {
+        return sendJson(res, 400, { ok: false, error: error.message });
+      }
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe-artist') {
+      try {
+        const artistId = requestUrl.searchParams.get('id') || '';
+        const artist = await probeArtistMetadata(artistId);
+        return sendJson(res, 200, { ok: true, artist });
       } catch (error) {
         return sendJson(res, 400, { ok: false, error: error.message });
       }
