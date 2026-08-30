@@ -42,6 +42,7 @@ async function main() {
   };
 
   let playlistBrowseCalls = 0;
+  let favouritedBrowseCalls = 0;
 
   const baseResolver = {
     async resolveTrack() {
@@ -83,7 +84,7 @@ async function main() {
     }
 
     if (command.includes('cid=My Music-Playlists-Favorited&')) {
-      playlistBrowseCalls += 1;
+      favouritedBrowseCalls += 1;
       return response(command, []);
     }
 
@@ -114,18 +115,19 @@ async function main() {
   assert.equal(first.mid, '341262056');
   assert.equal(first.cid, 'LIBALBUM-341262049');
   assert.equal(first.method, 'trusted-user-playlist-context');
-  assert.equal(first.evidence.type, 'heos-user-playlist');
+  assert.equal(first.evidence.type, 'heos-user-created-playlist');
   assert.equal(
     first.evidence.playlistCid,
     'LIBPLAYLIST-d36d23dd-83d0-4312-9958-986b3964ec84'
   );
-  assert.equal(playlistBrowseCalls, 4);
+  assert.equal(playlistBrowseCalls, 3);
+  assert.equal(favouritedBrowseCalls, 0, 'favourited playlists must not be trusted replacement evidence');
 
   const second = await trusted.resolveTrack(target);
   assert.equal(second.status, 'resolved');
   assert.equal(second.mid, '341262056');
   assert.equal(second.method, 'trusted-context-cache');
-  assert.equal(playlistBrowseCalls, 4, 'trusted cache should avoid another playlist scan');
+  assert.equal(playlistBrowseCalls, 3, 'trusted cache should avoid another playlist scan');
 
   const ambiguousTrusted = createTidalHeosTrustedResolver({
     baseResolver,
@@ -138,13 +140,12 @@ async function main() {
       }
       if (command.includes('cid=My Music-Playlists-Created by me&')) {
         return response(command, [
-          { cid: 'LIBPLAYLIST-one', container: 'yes' }
+          { cid: 'LIBPLAYLIST-one', container: 'yes' },
+          { cid: 'LIBPLAYLIST-two', container: 'yes' }
         ]);
       }
       if (command.includes('cid=My Music-Playlists-Favorited&')) {
-        return response(command, [
-          { cid: 'LIBPLAYLIST-two', container: 'yes' }
-        ]);
+        throw new Error('Favorited branch must not be scanned');
       }
       if (command.includes('LIBPLAYLIST-one')) {
         return response(command, [{
