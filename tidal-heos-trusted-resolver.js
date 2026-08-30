@@ -80,6 +80,37 @@ function createTidalHeosTrustedResolver(options = {}) {
     return items;
   }
 
+  async function discoverPlaylistCids() {
+    const queue = ['My Music-Playlists'];
+    const visited = new Set();
+    const playlistCids = new Set();
+    const maxContainers = 100;
+
+    while (queue.length) {
+      const cid = queue.shift();
+      if (!cid || visited.has(cid)) continue;
+      if (visited.size >= maxContainers) {
+        throw new Error('HEOS trusted-context container safety limit reached');
+      }
+      visited.add(cid);
+
+      const items = await browseAll(cid);
+      for (const item of items) {
+        const childCid = String(item?.cid || '');
+        if (!childCid || String(item?.container || '') !== 'yes') continue;
+
+        if (childCid.startsWith('LIBPLAYLIST-')) {
+          playlistCids.add(childCid);
+          continue;
+        }
+
+        if (!visited.has(childCid)) queue.push(childCid);
+      }
+    }
+
+    return [...playlistCids];
+  }
+
   function itemSupportsCandidate(item, candidate) {
     if (!item || !candidate) return false;
     if (String(item.mid || '') !== String(candidate.mid || '')) return false;
@@ -104,13 +135,7 @@ function createTidalHeosTrustedResolver(options = {}) {
       candidates.map(candidate => [candidateKey(candidate), candidate])
     );
     const evidenced = new Map();
-
-    const playlistRoots = await browseAll('My Music-Playlists');
-    const playlistCids = [...new Set(
-      playlistRoots
-        .map(item => String(item?.cid || ''))
-        .filter(cid => cid.startsWith('LIBPLAYLIST-'))
-    )];
+    const playlistCids = await discoverPlaylistCids();
 
     for (const playlistCid of playlistCids) {
       let items;
