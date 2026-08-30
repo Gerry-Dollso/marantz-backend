@@ -54,15 +54,37 @@ async function main() {
   };
 
   const heosBrowse = async command => {
-    if (command.includes('cid=My Music-Playlists')) {
+    if (command.includes('cid=My Music-Playlists&')) {
+      playlistBrowseCalls += 1;
+      return response(command, [
+        {
+          name: 'Created by me',
+          cid: 'My Music-Playlists-Created by me',
+          container: 'yes'
+        },
+        {
+          name: 'Favorited',
+          cid: 'My Music-Playlists-Favorited',
+          container: 'yes'
+        }
+      ]);
+    }
+
+    if (command.includes('cid=My Music-Playlists-Created by me&')) {
       playlistBrowseCalls += 1;
       return response(command, [
         {
           name: 'Early Alternative',
           cid: 'LIBPLAYLIST-d36d23dd-83d0-4312-9958-986b3964ec84',
-          container: 'yes'
+          container: 'yes',
+          type: 'playlist'
         }
       ]);
+    }
+
+    if (command.includes('cid=My Music-Playlists-Favorited&')) {
+      playlistBrowseCalls += 1;
+      return response(command, []);
     }
 
     if (command.includes('LIBPLAYLIST-d36d23dd-83d0-4312-9958-986b3964ec84')) {
@@ -93,20 +115,34 @@ async function main() {
   assert.equal(first.cid, 'LIBALBUM-341262049');
   assert.equal(first.method, 'trusted-user-playlist-context');
   assert.equal(first.evidence.type, 'heos-user-playlist');
-  assert.equal(playlistBrowseCalls, 2);
+  assert.equal(
+    first.evidence.playlistCid,
+    'LIBPLAYLIST-d36d23dd-83d0-4312-9958-986b3964ec84'
+  );
+  assert.equal(playlistBrowseCalls, 4);
 
   const second = await trusted.resolveTrack(target);
   assert.equal(second.status, 'resolved');
   assert.equal(second.mid, '341262056');
   assert.equal(second.method, 'trusted-context-cache');
-  assert.equal(playlistBrowseCalls, 2, 'trusted cache should avoid another playlist scan');
+  assert.equal(playlistBrowseCalls, 4, 'trusted cache should avoid another playlist scan');
 
   const ambiguousTrusted = createTidalHeosTrustedResolver({
     baseResolver,
     heosBrowse: async command => {
-      if (command.includes('cid=My Music-Playlists')) {
+      if (command.includes('cid=My Music-Playlists&')) {
         return response(command, [
-          { cid: 'LIBPLAYLIST-one', container: 'yes' },
+          { cid: 'My Music-Playlists-Created by me', container: 'yes' },
+          { cid: 'My Music-Playlists-Favorited', container: 'yes' }
+        ]);
+      }
+      if (command.includes('cid=My Music-Playlists-Created by me&')) {
+        return response(command, [
+          { cid: 'LIBPLAYLIST-one', container: 'yes' }
+        ]);
+      }
+      if (command.includes('cid=My Music-Playlists-Favorited&')) {
+        return response(command, [
           { cid: 'LIBPLAYLIST-two', container: 'yes' }
         ]);
       }
