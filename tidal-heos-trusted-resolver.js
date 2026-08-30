@@ -4,15 +4,16 @@
 //
 // This layer NEVER introduces a new playback candidate. It may only choose
 // between candidates that the base resolver has already qualified as exact
-// title/artist matches. User HEOS playlists are used as trusted context: if
-// exactly one qualified candidate is observed there, that candidate can be
-// selected. Otherwise ambiguity is preserved.
+// title/artist matches. User-created HEOS playlists are used as trusted
+// context: if exactly one qualified candidate is observed there, that
+// candidate can be selected. Otherwise ambiguity is preserved.
 
 function createTidalHeosTrustedResolver(options = {}) {
   const baseResolver = options.baseResolver;
   const heosBrowse = options.heosBrowse;
   const sid = String(options.sid || '10');
   const maxPlaylistPages = Math.max(1, Number(options.maxPlaylistPages) || 20);
+  const playlistConcurrency = Math.max(1, Math.min(8, Number(options.playlistConcurrency) || 4));
 
   if (!baseResolver || typeof baseResolver.resolveTrack !== 'function') {
     throw new Error('baseResolver.resolveTrack is required');
@@ -80,35 +81,20 @@ function createTidalHeosTrustedResolver(options = {}) {
     return items;
   }
 
-  async function discoverPlaylistCids() {
-    const queue = ['My Music-Playlists'];
-    const visited = new Set();
-    const playlistCids = new Set();
-    const maxContainers = 100;
+  async function discoverCreatedPlaylistCids() {
+    const roots = await browseAll('My Music-Playlists');
+    const createdRoot = roots.find(item =>
+      String(item?.cid || '') === 'My Music-Playlists-Created by me'
+    );
 
-    while (queue.length) {
-      const cid = queue.shift();
-      if (!cid || visited.has(cid)) continue;
-      if (visited.size >= maxContainers) {
-        throw new Error('HEOS trusted-context container safety limit reached');
-      }
-      visited.add(cid);
+    if (!createdRoot) return [];
 
-      const items = await browseAll(cid);
-      for (const item of items) {
-        const childCid = String(item?.cid || '');
-        if (!childCid || String(item?.container || '') !== 'yes') continue;
-
-        if (childCid.startsWith('LIBPLAYLIST-')) {
-          playlistCids.add(childCid);
-          continue;
-        }
-
-        if (!visited.has(childCid)) queue.push(childCid);
-      }
-    }
-
-    return [...playlistCids];
+    const items = await browseAll(String(createdRoot.cid));
+    return [...new Set(
+      items
+        .map(item => String(item?.cid || ''))
+        .filter(cid => cid.startsWith('LIBPLAYLIST-'))
+    )];
   }
 
   function itemSupportsCandidate(item, candidate) {
@@ -130,37 +116,53 @@ function createTidalHeosTrustedResolver(options = {}) {
     return true;
   }
 
+  async function mapWithConcurrency(values, concurrency, worker) {
+    let next = 0;
+    const workers = Array.from(
+      { length: Math.min(concurrency, values.length) },
+      async () => {
+        while (next < values.length) {
+          const index = next++;
+          await worker(values[index], index);
+        }
+      }
+    );
+    await Promise.all(workers);
+  }
+
   async function findPlaylistEvidence(candidates) {
     const candidateMap = new Map(
       candidates.map(candidate => [candidateKey(candidate), candidate])
     );
     const evidenced = new Map();
-    const playlistCids = await discoverPlaylistCids();
+    const playlistCids = await discoverCreatedPlaylistCids();
 
-    for (const playlistCid of playlistCids) {
-      let items;
-      try {
-        items = await browseAll(playlistCid);
-      } catch (error) {
-        console.warn(
-          'TIDAL TRUSTED CONTEXT PLAYLIST SKIP:',
-          playlistCid,
-          error.message
-        );
-        continue;
-      }
+    await mapWithConcurrency(
+      playlistCids,
+      playlistConcurrency,
+      async playlistCid => {
+        let items;
+        try {
+          items = await browseAll(playlistCid);
+        } catch (error) {
+          console.warn(
+            'TIDAL TRUSTED CONTEXT PLAYLIST SKIP:',
+            playlistCid,
+            error.message
+          );
+          return;
+        }
 
-      for (const candidate of candidateMap.values()) {
-        if (items.some(item => itemSupportsCandidate(item, candidate))) {
-          evidenced.set(candidateKey(candidate), {
-            candidate,
-            playlistCid
-          });
+        for (const candidate of candidateMap.values()) {
+          if (items.some(item => itemSupportsCandidate(item, candidate))) {
+            evidenced.set(candidateKey(candidate), {
+              candidate,
+              playlistCid
+            });
+          }
         }
       }
-
-      if (evidenced.size > 1) break;
-    }
+    );
 
     return [...evidenced.values()];
   }
@@ -246,7 +248,7 @@ function createTidalHeosTrustedResolver(options = {}) {
       mid: String(match.candidate.mid)
     };
     const trustedEvidence = {
-      type: 'heos-user-playlist',
+      type: 'heos-user-created-playlist',
       playlistCid: match.playlistCid
     };
 
