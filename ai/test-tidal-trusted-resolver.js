@@ -107,30 +107,44 @@ async function main() {
   const trusted = createTidalHeosTrustedResolver({
     baseResolver,
     heosBrowse,
-    sid: '10'
+    sid: '10',
+    autoWarm: false,
+    refreshIntervalMs: 0
   });
+
+  const cold = await trusted.resolveTrack(target);
+  assert.equal(cold.status, 'ambiguous');
+  assert.equal(cold.trustedContext.status, 'not-ready');
+  assert.equal(playlistBrowseCalls, 0, 'request path must not crawl playlists');
+
+  await trusted.refreshIndex();
+  assert.equal(playlistBrowseCalls, 3);
+  assert.equal(favouritedBrowseCalls, 0, 'favourited playlists must not be trusted replacement evidence');
+  assert.equal(trusted.stats().indexReady, true);
+  assert.equal(trusted.stats().indexedPlaylists, 1);
 
   const first = await trusted.resolveTrack(target);
   assert.equal(first.status, 'resolved');
   assert.equal(first.mid, '341262056');
   assert.equal(first.cid, 'LIBALBUM-341262049');
   assert.equal(first.method, 'trusted-user-playlist-context');
-  assert.equal(first.evidence.type, 'heos-user-created-playlist');
+  assert.equal(first.evidence.type, 'heos-user-created-playlist-index');
   assert.equal(
     first.evidence.playlistCid,
     'LIBPLAYLIST-d36d23dd-83d0-4312-9958-986b3964ec84'
   );
-  assert.equal(playlistBrowseCalls, 3);
-  assert.equal(favouritedBrowseCalls, 0, 'favourited playlists must not be trusted replacement evidence');
+  assert.equal(playlistBrowseCalls, 3, 'indexed request must not browse playlists');
 
   const second = await trusted.resolveTrack(target);
   assert.equal(second.status, 'resolved');
   assert.equal(second.mid, '341262056');
   assert.equal(second.method, 'trusted-context-cache');
-  assert.equal(playlistBrowseCalls, 3, 'trusted cache should avoid another playlist scan');
+  assert.equal(playlistBrowseCalls, 3, 'trusted cache should avoid playlist browsing');
 
   const ambiguousTrusted = createTidalHeosTrustedResolver({
     baseResolver,
+    autoWarm: false,
+    refreshIntervalMs: 0,
     heosBrowse: async command => {
       if (command.includes('cid=My Music-Playlists&')) {
         return response(command, [
@@ -169,9 +183,53 @@ async function main() {
     }
   });
 
+  await ambiguousTrusted.refreshIndex();
   const stillAmbiguous = await ambiguousTrusted.resolveTrack(target);
   assert.equal(stillAmbiguous.status, 'ambiguous');
   assert.equal(stillAmbiguous.trustedContext.status, 'ambiguous');
+
+  let failPlaylist = false;
+  const atomicTrusted = createTidalHeosTrustedResolver({
+    baseResolver,
+    autoWarm: false,
+    refreshIntervalMs: 0,
+    heosBrowse: async command => {
+      if (command.includes('cid=My Music-Playlists&')) {
+        return response(command, [
+          { cid: 'My Music-Playlists-Created by me', container: 'yes' }
+        ]);
+      }
+      if (command.includes('cid=My Music-Playlists-Created by me&')) {
+        return response(command, [
+          { cid: 'LIBPLAYLIST-one', container: 'yes' },
+          { cid: 'LIBPLAYLIST-two', container: 'yes' }
+        ]);
+      }
+      if (command.includes('LIBPLAYLIST-one')) {
+        return response(command, [{
+          name: 'Birthday',
+          artist: 'The Sugarcubes',
+          album_id: '341262049',
+          mid: '341262056'
+        }]);
+      }
+      if (command.includes('LIBPLAYLIST-two')) {
+        if (failPlaylist) throw new Error('simulated playlist failure');
+        return response(command, []);
+      }
+      throw new Error(`Unexpected HEOS command: ${command}`);
+    }
+  });
+
+  await atomicTrusted.refreshIndex();
+  const beforeFailure = await atomicTrusted.resolveTrack(target);
+  assert.equal(beforeFailure.status, 'resolved');
+  failPlaylist = true;
+  await assert.rejects(() => atomicTrusted.refreshIndex(), /simulated playlist failure/);
+  assert.equal(atomicTrusted.stats().indexReady, true, 'failed refresh must retain previous complete index');
+  const afterFailure = await atomicTrusted.resolveTrack(target);
+  assert.equal(afterFailure.status, 'resolved');
+  assert.equal(afterFailure.mid, '341262056');
 
   const passthrough = createTidalHeosTrustedResolver({
     baseResolver: {
@@ -186,7 +244,9 @@ async function main() {
     },
     heosBrowse: async () => {
       throw new Error('HEOS trusted-context browse should not run');
-    }
+    },
+    autoWarm: false,
+    refreshIntervalMs: 0
   });
 
   const direct = await passthrough.resolveTrack({ officialTrackId: '2' });
