@@ -965,130 +965,255 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
-      const resolvedTracks = [];
+      const makeTarget = track => ({
+        officialTrackId: String(track.id || ''),
+        title: String(track.title || ''),
+        artistId: String(track.artistId || ''),
+        artist: String(track.artist || ''),
+        albumId: String(track.albumId || ''),
+        album: String(track.album || ''),
+        isrc: String(track.isrc || ''),
+        duration: String(track.duration || '')
+      });
+
+      const queueResolvedTrack = async (target, resolution, aid) => {
+        const queueCommand = heosBrowse(
+          'heos://browse/add_to_queue?pid=' + encodeURIComponent(PLAYER_ID) +
+          '&sid=10&cid=' + encodeURIComponent(resolution.cid) +
+          '&mid=' + encodeURIComponent(resolution.mid) +
+          '&aid=' + aid,
+          15000
+        );
+        tidalFavouriteQueueCommand = queueCommand;
+        try {
+          await queueCommand;
+        } finally {
+          if (tidalFavouriteQueueCommand === queueCommand) {
+            tidalFavouriteQueueCommand = null;
+          }
+        }
+      };
+
+      const logUnresolvedSkip = (index, target, resolution) => {
+        console.warn(
+          'TIDAL RESOLVED PLAYLIST UNRESOLVED SKIP:',
+          JSON.stringify({
+            index,
+            officialTrackId: target.officialTrackId,
+            title: target.title,
+            artist: target.artist,
+            status: resolution?.status || 'unknown',
+            reason: resolution?.reason || resolution?.trustedContext?.status || ''
+          })
+        );
+      };
+
+      const logQueueSkip = (index, target, resolution, error) => {
+        console.warn(
+          'TIDAL RESOLVED PLAYLIST TRACK SKIP:',
+          JSON.stringify({
+            index,
+            officialTrackId: target.officialTrackId,
+            title: target.title,
+            artist: target.artist,
+            cid: resolution.cid,
+            mid: resolution.mid,
+            error: error.message
+          })
+        );
+      };
+
+      let skippedCount = 0;
+      let resolvedCount = 0;
+      let attemptedCount = 0;
+      let firstMid = '';
+      let backgroundStartIndex = queueTracks.length;
+
       for (let index = 0; index < queueTracks.length; index += 1) {
         if (!tidalQueueBuildIsCurrent(queueGeneration)) {
           return sendJson(res, 200, {
             ok: true,
             cancelled: true,
             queued: 0,
-            skipped: 0,
-            resolved: resolvedTracks.length,
-            attempted: queueTracks.length,
+            skipped: skippedCount,
+            resolved: resolvedCount,
+            attempted: attemptedCount,
             shuffle
           });
         }
 
-        const track = queueTracks[index];
-        const target = {
-          officialTrackId: String(track.id || ''),
-          title: String(track.title || ''),
-          artistId: String(track.artistId || ''),
-          artist: String(track.artist || ''),
-          albumId: String(track.albumId || ''),
-          album: String(track.album || ''),
-          isrc: String(track.isrc || ''),
-          duration: String(track.duration || '')
-        };
-        const resolution = await tidalHeosTrustedResolver.resolveTrack(target);
+        const target = makeTarget(queueTracks[index]);
+        attemptedCount += 1;
+        let resolution;
+        try {
+          resolution = await tidalHeosTrustedResolver.resolveTrack(target);
+        } catch (error) {
+          if (!tidalQueueBuildIsCurrent(queueGeneration)) break;
+          skippedCount += 1;
+          console.warn(
+            'TIDAL RESOLVED PLAYLIST RESOLUTION SKIP:',
+            JSON.stringify({
+              index,
+              officialTrackId: target.officialTrackId,
+              title: target.title,
+              artist: target.artist,
+              error: error.message
+            })
+          );
+          continue;
+        }
 
+        if (!tidalQueueBuildIsCurrent(queueGeneration)) break;
         if (
           resolution.status !== 'resolved' ||
           !resolution.cid ||
           !resolution.mid
         ) {
-          return sendJson(res, 409, {
-            ok: false,
-            error: 'Playlist track could not be resolved safely for HEOS playback',
-            playlist: personalised.playlist,
-            index,
-            track: target,
-            resolution
-          });
+          skippedCount += 1;
+          logUnresolvedSkip(index, target, resolution);
+          continue;
         }
 
-        resolvedTracks.push({ track: target, resolution });
+        resolvedCount += 1;
+        try {
+          await queueResolvedTrack(target, resolution, 4);
+        } catch (error) {
+          if (!tidalQueueBuildIsCurrent(queueGeneration)) break;
+          skippedCount += 1;
+          logQueueSkip(index, target, resolution, error);
+          continue;
+        }
+
+        if (!tidalQueueBuildIsCurrent(queueGeneration)) break;
+        firstMid = String(resolution.mid);
+        backgroundStartIndex = index + 1;
+        break;
       }
 
       if (!tidalQueueBuildIsCurrent(queueGeneration)) {
         return sendJson(res, 200, {
           ok: true,
           cancelled: true,
-          queued: 0,
-          skipped: 0,
-          resolved: resolvedTracks.length,
-          attempted: resolvedTracks.length,
+          queued: firstMid ? 1 : 0,
+          skipped: skippedCount,
+          resolved: resolvedCount,
+          attempted: attemptedCount,
+          shuffle,
+          firstMid
+        });
+      }
+
+      if (!firstMid) {
+        return sendJson(res, 409, {
+          ok: false,
+          error: 'No personalised playlist track could be resolved safely for HEOS playback',
+          playlist: personalised.playlist,
+          skipped: skippedCount,
+          resolved: resolvedCount,
+          attempted: attemptedCount,
           shuffle
         });
       }
 
-      let queuedCount = 0;
-      let skippedCount = 0;
-      let firstMid = '';
+      await heosBrowse(
+        'heos://player/set_play_mode?pid=' + encodeURIComponent(PLAYER_ID) +
+        '&shuffle=off'
+      );
 
-      for (const item of resolvedTracks) {
-        if (!tidalQueueBuildIsCurrent(queueGeneration)) break;
+      const backgroundQueueBuild = async () => {
+        let queuedCount = 1;
+        let backgroundSkipped = skippedCount;
+        let backgroundResolved = resolvedCount;
+        let backgroundAttempted = attemptedCount;
 
-        const aid = queuedCount === 0 ? 4 : 3;
-        try {
-          const queueCommand = heosBrowse(
-            'heos://browse/add_to_queue?pid=' + encodeURIComponent(PLAYER_ID) +
-            '&sid=10&cid=' + encodeURIComponent(item.resolution.cid) +
-            '&mid=' + encodeURIComponent(item.resolution.mid) +
-            '&aid=' + aid,
-            15000
-          );
-          tidalFavouriteQueueCommand = queueCommand;
+        for (let index = backgroundStartIndex; index < queueTracks.length; index += 1) {
+          if (!tidalQueueBuildIsCurrent(queueGeneration)) break;
+
+          const target = makeTarget(queueTracks[index]);
+          backgroundAttempted += 1;
+          let resolution;
           try {
-            await queueCommand;
-          } finally {
-            if (tidalFavouriteQueueCommand === queueCommand) {
-              tidalFavouriteQueueCommand = null;
-            }
+            resolution = await tidalHeosTrustedResolver.resolveTrack(target);
+          } catch (error) {
+            if (!tidalQueueBuildIsCurrent(queueGeneration)) break;
+            backgroundSkipped += 1;
+            console.warn(
+              'TIDAL RESOLVED PLAYLIST RESOLUTION SKIP:',
+              JSON.stringify({
+                index,
+                officialTrackId: target.officialTrackId,
+                title: target.title,
+                artist: target.artist,
+                error: error.message
+              })
+            );
+            continue;
           }
 
           if (!tidalQueueBuildIsCurrent(queueGeneration)) break;
-          if (queuedCount === 0) firstMid = String(item.resolution.mid);
-          queuedCount += 1;
-        } catch (error) {
+          if (
+            resolution.status !== 'resolved' ||
+            !resolution.cid ||
+            !resolution.mid
+          ) {
+            backgroundSkipped += 1;
+            logUnresolvedSkip(index, target, resolution);
+            continue;
+          }
+
+          backgroundResolved += 1;
+          try {
+            await queueResolvedTrack(target, resolution, 3);
+          } catch (error) {
+            if (!tidalQueueBuildIsCurrent(queueGeneration)) break;
+            backgroundSkipped += 1;
+            logQueueSkip(index, target, resolution, error);
+            continue;
+          }
+
           if (!tidalQueueBuildIsCurrent(queueGeneration)) break;
-          skippedCount += 1;
+          queuedCount += 1;
+        }
+
+        console.log(
+          'TIDAL RESOLVED PLAYLIST BACKGROUND:',
+          JSON.stringify({
+            generation: queueGeneration,
+            cancelled: !tidalQueueBuildIsCurrent(queueGeneration),
+            queued: queuedCount,
+            skipped: backgroundSkipped,
+            resolved: backgroundResolved,
+            attempted: backgroundAttempted,
+            total: queueTracks.length,
+            shuffle
+          })
+        );
+      };
+
+      if (backgroundStartIndex < queueTracks.length) {
+        void backgroundQueueBuild().catch(error => {
           console.warn(
-            'TIDAL RESOLVED PLAYLIST TRACK SKIP:',
+            'TIDAL RESOLVED PLAYLIST BACKGROUND ERROR:',
             JSON.stringify({
-              officialTrackId: item.track.officialTrackId,
-              title: item.track.title,
-              artist: item.track.artist,
-              cid: item.resolution.cid,
-              mid: item.resolution.mid,
+              generation: queueGeneration,
               error: error.message
             })
           );
-        }
-      }
-
-      const cancelled = !tidalQueueBuildIsCurrent(queueGeneration);
-      if (!queuedCount && !cancelled) {
-        throw new Error('No resolved playlist tracks could be queued');
-      }
-
-      if (!cancelled) {
-        await heosBrowse(
-          'heos://player/set_play_mode?pid=' + encodeURIComponent(PLAYER_ID) +
-          '&shuffle=off'
-        );
+        });
       }
 
       return sendJson(res, 200, {
         ok: true,
-        cancelled,
+        cancelled: false,
         playlist: personalised.playlist,
-        queued: queuedCount,
+        queued: 1,
         skipped: skippedCount,
-        resolved: resolvedTracks.length,
-        attempted: resolvedTracks.length,
+        resolved: resolvedCount,
+        attempted: attemptedCount,
         shuffle,
         firstMid,
+        building: backgroundStartIndex < queueTracks.length,
+        remaining: Math.max(0, queueTracks.length - backgroundStartIndex),
         sourceCached: Boolean(personalised.cached)
       });
     } catch (error) {
