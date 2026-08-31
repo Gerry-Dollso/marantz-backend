@@ -449,7 +449,12 @@ function createTidalUserAuthRecon(options = {}) {
       const id = String(resource.id);
       if (seen.has(id)) return;
       seen.add(id);
-      playlists.push({ id, name: playlistName(resource), kind });
+      playlists.push({
+        id,
+        name: playlistName(resource),
+        kind,
+        description: String(resource.attributes?.description || '').trim()
+      });
     };
 
     const dailyMixResources = (raw.dailyMixes?.included || [])
