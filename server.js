@@ -26,6 +26,9 @@ const {
 const {
   createTidalHeosResolver
 } = require('./tidal-heos-resolver');
+const {
+  createTidalHeosTrustedResolver
+} = require('./tidal-heos-trusted-resolver');
 
 const AVR_HOST = '192.168.50.220';
 const AVR_PORT = 23;
@@ -40,6 +43,11 @@ const tidalUserAuthRecon = createTidalUserAuthRecon({
   countryCode: 'GB'
 });
 const tidalHeosResolver = createTidalHeosResolver({
+  heosBrowse,
+  sid: '10'
+});
+const tidalHeosTrustedResolver = createTidalHeosTrustedResolver({
+  baseResolver: tidalHeosResolver,
   heosBrowse,
   sid: '10'
 });
@@ -982,7 +990,7 @@ const server = http.createServer(async (req, res) => {
           isrc: String(track.isrc || ''),
           duration: String(track.duration || '')
         };
-        const resolution = await tidalHeosResolver.resolveTrack(target);
+        const resolution = await tidalHeosTrustedResolver.resolveTrack(target);
 
         if (
           resolution.status !== 'resolved' ||
@@ -1098,7 +1106,7 @@ const server = http.createServer(async (req, res) => {
 
       const metadata = await tidalUserAuthRecon.getTrackMetadata(id);
       const track = tidalHeosResolver.extractOfficialTrack(metadata);
-      const resolution = await tidalHeosResolver.resolveTrack(track);
+      const resolution = await tidalHeosTrustedResolver.resolveTrack(track);
       return sendJson(res, 200, {
         ok: true,
         track,
@@ -1120,7 +1128,7 @@ const server = http.createServer(async (req, res) => {
 
       const metadata = await tidalUserAuthRecon.getTrackMetadata(id);
       const track = tidalHeosResolver.extractOfficialTrack(metadata);
-      const resolution = await tidalHeosResolver.resolveTrack(track);
+      const resolution = await tidalHeosTrustedResolver.resolveTrack(track);
 
       if (resolution.status !== 'resolved' || !resolution.cid || !resolution.mid) {
         return sendJson(res, 409, {

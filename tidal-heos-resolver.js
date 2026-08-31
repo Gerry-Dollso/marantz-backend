@@ -180,7 +180,20 @@ function createTidalHeosResolver(options = {}) {
       const x = unique[0];
       return { status: 'resolved', method: 'artist-album-track', confidence: x.album.score === 1 ? 'exact' : 'edition-normalised', cid: x.album.cid, mid: String(x.track.mid) };
     }
-    if (unique.length > 1 || deterministicUnique.length > 1) return { status: 'ambiguous', reason: 'multiple HEOS album/track matches' };
+    if (unique.length > 1 || deterministicUnique.length > 1) {
+      const ambiguous = unique.length > 1 ? unique : deterministicUnique;
+      return {
+        status: 'ambiguous',
+        reason: 'multiple HEOS album/track matches',
+        candidates: ambiguous.map(x => ({
+          cid: String(x.album.cid),
+          albumId: String(x.album.cid).replace(/^LIBALBUM-/, ''),
+          mid: String(x.track.mid),
+          title: String(x.track.name || target.title || ''),
+          artist: String(x.track.artist || target.artist || '')
+        }))
+      };
+    }
     return { status: 'unresolved', reason: 'album candidates did not contain a safe track match' };
   }
 
