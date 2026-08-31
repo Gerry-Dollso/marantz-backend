@@ -4,9 +4,9 @@
 //
 // This layer NEVER introduces a new playback candidate. It may only choose
 // between candidates that the base resolver has already qualified as exact
-// title/artist matches. User-created HEOS playlists are used as trusted
-// context: if exactly one qualified candidate is observed there, that
-// candidate can be selected. Otherwise ambiguity is preserved.
+// title/artist matches. A complete index of user-created HEOS playlists is
+// built in the background. Ambiguous requests consult that index without
+// blocking on HEOS playlist crawling. Partial refreshes are never trusted.
 
 function createTidalHeosTrustedResolver(options = {}) {
   const baseResolver = options.baseResolver;
@@ -14,6 +14,10 @@ function createTidalHeosTrustedResolver(options = {}) {
   const sid = String(options.sid || '10');
   const maxPlaylistPages = Math.max(1, Number(options.maxPlaylistPages) || 20);
   const playlistConcurrency = Math.max(1, Math.min(8, Number(options.playlistConcurrency) || 4));
+  const autoWarm = options.autoWarm !== false;
+  const refreshIntervalMs = Number.isFinite(Number(options.refreshIntervalMs))
+    ? Math.max(0, Number(options.refreshIntervalMs))
+    : 30 * 60 * 1000;
 
   if (!baseResolver || typeof baseResolver.resolveTrack !== 'function') {
     throw new Error('baseResolver.resolveTrack is required');
@@ -23,6 +27,10 @@ function createTidalHeosTrustedResolver(options = {}) {
   }
 
   const trustedCache = new Map();
+  let trustedIndex = null;
+  let refreshPromise = null;
+  let lastRefreshAt = 0;
+  let lastRefreshError = '';
 
   function normalise(value) {
     return String(value || '')
@@ -130,39 +138,85 @@ function createTidalHeosTrustedResolver(options = {}) {
     await Promise.all(workers);
   }
 
-  async function findPlaylistEvidence(candidates) {
-    const candidateMap = new Map(
-      candidates.map(candidate => [candidateKey(candidate), candidate])
-    );
-    const evidenced = new Map();
+  async function buildTrustedIndex() {
     const playlistCids = await discoverCreatedPlaylistCids();
+    const byMid = new Map();
+    let trackEntries = 0;
 
+    // The refresh is atomic: any failed playlist browse rejects the entire
+    // build so absence from a partial scan can never be treated as evidence.
     await mapWithConcurrency(
       playlistCids,
       playlistConcurrency,
       async playlistCid => {
-        let items;
-        try {
-          items = await browseAll(playlistCid);
-        } catch (error) {
-          console.warn(
-            'TIDAL TRUSTED CONTEXT PLAYLIST SKIP:',
-            playlistCid,
-            error.message
-          );
-          return;
-        }
+        const items = await browseAll(playlistCid);
+        for (const item of items) {
+          const mid = String(item?.mid || '').trim();
+          if (!mid) continue;
 
-        for (const candidate of candidateMap.values()) {
-          if (items.some(item => itemSupportsCandidate(item, candidate))) {
-            evidenced.set(candidateKey(candidate), {
-              candidate,
-              playlistCid
-            });
-          }
+          const entry = {
+            mid,
+            name: String(item?.name || ''),
+            artist: String(item?.artist || ''),
+            album_id: String(item?.album_id || ''),
+            playlistCid
+          };
+
+          if (!byMid.has(mid)) byMid.set(mid, []);
+          byMid.get(mid).push(entry);
+          trackEntries += 1;
         }
       }
     );
+
+    for (const entries of byMid.values()) {
+      entries.sort((a, b) => a.playlistCid.localeCompare(b.playlistCid));
+    }
+
+    return {
+      byMid,
+      playlistCount: playlistCids.length,
+      trackEntries,
+      builtAt: Date.now()
+    };
+  }
+
+  function refreshIndex() {
+    if (refreshPromise) return refreshPromise;
+
+    refreshPromise = buildTrustedIndex()
+      .then(nextIndex => {
+        trustedIndex = nextIndex;
+        lastRefreshAt = nextIndex.builtAt;
+        lastRefreshError = '';
+        trustedCache.clear();
+        return nextIndex;
+      })
+      .catch(error => {
+        lastRefreshError = error.message;
+        throw error;
+      })
+      .finally(() => {
+        refreshPromise = null;
+      });
+
+    return refreshPromise;
+  }
+
+  function findIndexedEvidence(candidates) {
+    if (!trustedIndex) return null;
+
+    const evidenced = new Map();
+    for (const candidate of candidates) {
+      const entries = trustedIndex.byMid.get(String(candidate.mid || '')) || [];
+      const supporting = entries.filter(item => itemSupportsCandidate(item, candidate));
+      if (!supporting.length) continue;
+
+      evidenced.set(candidateKey(candidate), {
+        candidate,
+        playlistCid: supporting[0].playlistCid
+      });
+    }
 
     return [...evidenced.values()];
   }
@@ -215,15 +269,13 @@ function createTidalHeosTrustedResolver(options = {}) {
       };
     }
 
-    let evidence;
-    try {
-      evidence = await findPlaylistEvidence(candidates);
-    } catch (error) {
+    const evidence = findIndexedEvidence(candidates);
+    if (evidence === null) {
       return {
         ...base,
         trustedContext: {
-          status: 'unavailable',
-          reason: error.message
+          status: refreshPromise ? 'warming' : 'not-ready',
+          reason: lastRefreshError || undefined
         }
       };
     }
@@ -248,8 +300,9 @@ function createTidalHeosTrustedResolver(options = {}) {
       mid: String(match.candidate.mid)
     };
     const trustedEvidence = {
-      type: 'heos-user-created-playlist',
-      playlistCid: match.playlistCid
+      type: 'heos-user-created-playlist-index',
+      playlistCid: match.playlistCid,
+      indexBuiltAt: trustedIndex.builtAt
     };
 
     const key = cacheKey(target);
@@ -271,12 +324,34 @@ function createTidalHeosTrustedResolver(options = {}) {
 
   function stats() {
     return {
-      trustedMappings: trustedCache.size
+      trustedMappings: trustedCache.size,
+      indexReady: Boolean(trustedIndex),
+      indexRefreshing: Boolean(refreshPromise),
+      indexedPlaylists: trustedIndex?.playlistCount || 0,
+      indexedTrackEntries: trustedIndex?.trackEntries || 0,
+      lastRefreshAt,
+      lastRefreshError
     };
+  }
+
+  if (autoWarm) {
+    refreshIndex().catch(error => {
+      console.warn('TIDAL TRUSTED CONTEXT INDEX REFRESH FAILED:', error.message);
+    });
+  }
+
+  if (refreshIntervalMs > 0) {
+    const timer = setInterval(() => {
+      refreshIndex().catch(error => {
+        console.warn('TIDAL TRUSTED CONTEXT INDEX REFRESH FAILED:', error.message);
+      });
+    }, refreshIntervalMs);
+    if (typeof timer.unref === 'function') timer.unref();
   }
 
   return {
     resolveTrack,
+    refreshIndex,
     stats
   };
 }
