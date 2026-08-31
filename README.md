@@ -1,5 +1,30 @@
 # marantz-backend
 
+## 2026-08-31 — Fast personalised TIDAL playback and rich UI backend checkpoint
+
+- Replaced whole-playlist pre-resolution with fast first-track playback followed by generation-controlled background queue construction. Live My Mix 1 testing returned in about **2.343 seconds**, began with Smashing Pumpkins, and completed **39/39 queued, 0 skipped** in the background.
+- Added the background trusted user-playlist index for deterministic resolution of catalogue substitutions. The expensive Created by me playlist crawl is no longer in the request path; complete snapshots are built off-side and swapped atomically. Ambiguous requests fail promptly while the index warms.
+- Closed The Sugarcubes — Birthday identity case without hard-coding the track. Official personalised track `34454218` is deterministically resolved to HEOS/TIDAL playable `341262056` / album `341262049` through trusted user-created playlist context, matching the already-proven TIDAL Share, TIDAL Connect artwork and Early Alternative evidence.
+- Birthday no longer breaks real My Mix 1 queue construction; the tested 39-track mix completed with zero skips.
+- Exposed official recommendation `description` values from `/api/tidal/personalised` for the Pi landing cards. Live uncached response returned all ten recommendation descriptions.
+- Official TIDAL API remains the catalogue/UI metadata source and HEOS remains playback transport. Official search remains access-blocked for this developer app; do not regress frontend catalogue work to HEOS search to compensate.
+- Direct TIDAL playback remains parked.
+
+Key backend checkpoints:
+
+```text
+0a5238f — Integrate trusted TIDAL HEOS resolution
+27440abc6fd244da499529425a16fb11b986657c — Build trusted index in background
+614850d — Build personalised TIDAL queues in background
+66f6345 — Expose personalised TIDAL descriptions
+```
+
+Current tested backend source checkpoint:
+
+```text
+66f6345 — Expose personalised TIDAL descriptions
+```
+
 <!-- TIDAL_BIRTHDAY_HANDOVER_2026_08_29 -->
 ## Active handover — 29 Aug 2026
 
