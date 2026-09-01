@@ -108,8 +108,10 @@ function createTidalUserAuthRecon(options = {}) {
   let refreshInFlight = null;
   const personalisedRecommendationsCache = { value: null, expiresAt: 0 };
   const personalisedPlaylistCache = new Map();
+  const personalisedArtworkCache = new Map();
   const PERSONALISED_RECOMMENDATIONS_TTL_MS = 5 * 60 * 1000;
   const PERSONALISED_PLAYLIST_TTL_MS = 5 * 60 * 1000;
+  const PERSONALISED_ARTWORK_TTL_MS = 30 * 60 * 1000;
   const PERSONALISED_PLAYLIST_MAX_PAGES = 10;
   const refreshTokenFile = String(
     options.refreshTokenFile || process.env.TIDAL_REFRESH_TOKEN_FILE || DEFAULT_REFRESH_TOKEN_FILE
@@ -476,6 +478,75 @@ function createTidalUserAuthRecon(options = {}) {
     const value = { playlists };
     personalisedRecommendationsCache.value = value;
     personalisedRecommendationsCache.expiresAt = Date.now() + PERSONALISED_RECOMMENDATIONS_TTL_MS;
+    return { ...value, cached: false };
+  }
+
+  async function getPersonalisedArtwork(playlistId) {
+    const id = String(playlistId || '').trim();
+    if (!/^[a-zA-Z0-9]+$/.test(id)) {
+      throw new Error('Playlist id must be alphanumeric');
+    }
+
+    const cached = personalisedArtworkCache.get(id);
+    if (cached && Date.now() < cached.expiresAt) {
+      return { ...cached.value, cached: true };
+    }
+
+    const fullCached = personalisedPlaylistCache.get(id);
+    if (fullCached && Date.now() < fullCached.expiresAt) {
+      const artwork = [];
+      for (const track of fullCached.value?.tracks || []) {
+        const url = String(track?.artwork || '').trim();
+        if (!url || artwork.includes(url)) continue;
+        artwork.push(url);
+        if (artwork.length === 4) break;
+      }
+      const value = {
+        playlist: {
+          id: String(fullCached.value?.playlist?.id || id),
+          name: String(fullCached.value?.playlist?.name || '')
+        },
+        artwork
+      };
+      personalisedArtworkCache.set(id, {
+        value,
+        expiresAt: Date.now() + PERSONALISED_ARTWORK_TTL_MS
+      });
+      return { ...value, cached: true };
+    }
+
+    const first = await probePlaylistArtworkAndPage(id, '');
+    const root = first?.data && !Array.isArray(first.data) ? first.data : null;
+    if (!root || root.type !== 'playlists') {
+      throw new Error('TIDAL playlist response did not contain a playlist resource');
+    }
+
+    const resources = buildResourceMap(
+      Array.isArray(first.included) ? first.included : []
+    );
+    const artwork = [];
+    for (const linkage of relationshipItems(root.relationships?.items)) {
+      const url = String(compactTrack(linkage, resources)?.artwork || '').trim();
+      if (!url || artwork.includes(url)) continue;
+      artwork.push(url);
+      if (artwork.length === 4) break;
+    }
+
+    const value = {
+      playlist: {
+        id: String(root.id),
+        name: playlistName(root)
+      },
+      artwork
+    };
+    personalisedArtworkCache.set(id, {
+      value,
+      expiresAt: Date.now() + PERSONALISED_ARTWORK_TTL_MS
+    });
+    if (personalisedArtworkCache.size > 16) {
+      const oldestKey = personalisedArtworkCache.keys().next().value;
+      personalisedArtworkCache.delete(oldestKey);
+    }
     return { ...value, cached: false };
   }
 
@@ -1218,6 +1289,16 @@ async function probeSearch() {
         return sendJson(res, 200, { ok: true, ...personalised });
       } catch (error) {
         return sendJson(res, 500, { ok: false, error: error.message });
+      }
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/personalised/artwork') {
+      try {
+        const playlistId = requestUrl.searchParams.get('id') || '';
+        const personalised = await getPersonalisedArtwork(playlistId);
+        return sendJson(res, 200, { ok: true, ...personalised });
+      } catch (error) {
+        return sendJson(res, 400, { ok: false, error: error.message });
       }
     }
 
