@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-09-01 — Lightweight personalised TIDAL artwork
+
+- Added an independent 30-minute `personalisedArtworkCache` for landing-card covers.
+- Added `getPersonalisedArtwork(playlistId)`, which first reuses the full personalised playlist cache when available; otherwise it fetches only the first official playlist page and stops after collecting up to four distinct cover URLs.
+- Added `GET /api/tidal/personalised/artwork?id=<playlistId>`. Full personalised playlist pagination remains reserved for actual playlist detail/playback.
+- This change addresses the observed TIDAL 429/temporary failure pattern caused by unnecessary full-playlist artwork enrichment under cold-cache activity without weakening resolver or playback safety.
+- Verified the endpoint on My Mix 1 with four official artwork URLs and a warm-cache repeat.
+- End-to-end Pi testing populated all ten personalised cards from a genuine cold backend cache after restarting `marantz-backend.service`.
+- PLAY FROM HERE remains deliberately pending and is the next planned personalised queue-tail feature.
+
+Checkpoint:
+
+```text
+2c8ac84 — Add lightweight personalised TIDAL artwork
+```
+
+Companion Pi checkpoint:
+
+```text
+300be7a — Fix personalised TIDAL artwork loading
+```
+
+Current tested backend source checkpoint:
+
+```text
+2c8ac84 — Add lightweight personalised TIDAL artwork
+```
+
 ## 2026-08-31 — Fast personalised TIDAL playback and rich UI backend checkpoint
 
 - Replaced whole-playlist pre-resolution with fast first-track playback followed by generation-controlled background queue construction. Live My Mix 1 testing returned in about **2.343 seconds**, began with Smashing Pumpkins, and completed **39/39 queued, 0 skipped** in the background.

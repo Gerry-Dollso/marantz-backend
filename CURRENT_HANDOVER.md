@@ -1,4 +1,4 @@
-# Current handover — 31 Aug 2026
+# Current handover — 1 Sep 2026
 
 This is the authoritative short handover for current MarantzPi / HP backend TIDAL work. Do not restart the closed Birthday/replacement reconnaissance unless a later code change specifically invalidates the evidence below.
 
@@ -16,11 +16,11 @@ Pi: `Gerry-Dollso/marantzPI`, live branch `housekeeping-2026-08-21`, runtime `~/
 
 ## Current tested checkpoints
 
-Backend source checkpoint: `66f6345 — Expose personalised TIDAL descriptions`.
+Backend source checkpoint: `2c8ac84 — Add lightweight personalised TIDAL artwork`.
 
-Pi source checkpoint: `a65f1b5 — Add rich personalised TIDAL landing cards`.
+Pi source checkpoint: `300be7a — Fix personalised TIDAL artwork loading`.
 
-The Pi landing page for My Mix 1-8, My Daily Discovery and My New Arrivals renders official TIDAL names/descriptions immediately, then progressively fills each card with a 2x2 collage from up to four distinct official album covers using limited concurrency. Personalised track rows show official artwork, title, artist and album.
+The Pi landing page for My Mix 1-8, My Daily Discovery and My New Arrivals renders official TIDAL names/descriptions immediately, then progressively fills each card with a 2x2 collage from up to four distinct official album covers. Landing artwork now uses a dedicated first-page-only backend endpoint with an independent 30-minute cache. Pi enrichment is sequential and a failed card receives one delayed retry. End-to-end testing populated all ten cards from a genuinely cold backend cache. Personalised track rows show official artwork, title, artist and album.
 
 ## Fast personalised queue architecture — IMPLEMENTED AND PROVEN
 
@@ -65,11 +65,11 @@ Do **not** redo Early Alternative discovery, ordinary HEOS playlist visibility, 
 
 ## Personalised endpoints/UI contract
 
-`/api/tidal/personalised` returns the ten current personalised recommendation resources with `id`, `name`, `kind` and official TIDAL `description`. The playlist detail endpoint returns canonical tracks with id, title, artist/artistId, album/albumId, duration, explicit, ISRC and official artwork.
+`/api/tidal/personalised` returns the ten current personalised recommendation resources with `id`, `name`, `kind` and official TIDAL `description`. The full playlist detail endpoint returns canonical tracks with id, title, artist/artistId, album/albumId, duration, explicit, ISRC and official artwork.
 
-The Pi uses the existing playlist detail endpoint progressively for landing-card artwork rather than blocking the initial recommendation listing or adding a separate preview endpoint. Measured Pi-side playlist calls were roughly 24-26 ms during testing.
+Landing-card artwork uses the separate `GET /api/tidal/personalised/artwork?id=<playlistId>` endpoint. On a cold artwork/full-playlist cache it fetches only the first official playlist page and returns up to four distinct artwork URLs; it does not paginate. Artwork has an independent 30-minute cache, and a warm full-playlist cache can satisfy it with no additional TIDAL request. The Pi loads these requests sequentially and retries only a failed card once after two seconds.
 
-Personalised PLAY ALL / SHUFFLE ALL are live. Individual tracks support PLAY NOW, PLAY NEXT, ADD TO END and PLAY ONLY. PLAY FROM HERE remains deliberately unavailable for My Mixes for now.
+Personalised PLAY ALL / SHUFFLE ALL are live. Individual tracks support PLAY NOW, PLAY NEXT, ADD TO END and PLAY ONLY. PLAY FROM HERE remains deliberately unavailable for My Mixes for now. The next implementation should replace the current queue with the selected personalised track followed by every later track from the same Mix in original order, preserving existing deterministic resolution, background queue-building and generation-cancellation safety.
 
 ## Working discipline
 

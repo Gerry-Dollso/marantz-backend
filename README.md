@@ -1,5 +1,29 @@
 # marantz-backend
 
+## 2026-09-01 — Lightweight personalised TIDAL artwork checkpoint
+
+- Added a dedicated lightweight personalised artwork path so the touchscreen no longer loads complete My Mix playlists merely to construct landing-card collages.
+- `getPersonalisedArtwork(playlistId)` returns up to four distinct official TIDAL cover URLs from the first playlist page only. It does not paginate for artwork.
+- Artwork has its own 30-minute bounded in-memory cache. If the full personalised-playlist cache is already warm, artwork is derived from that cached track list with zero additional TIDAL API calls.
+- Added `GET /api/tidal/personalised/artwork?id=<playlistId>`. The existing full `/api/tidal/personalised/playlist` path remains unchanged for opening and playing a Mix.
+- The Pi now loads landing artwork sequentially and retries only a failed card once after two seconds, reducing cold-load request pressure instead of increasing concurrency.
+- Runtime proof: all ten My Mix/My Daily Discovery/My New Arrivals cards populated with warm caches, then the backend service was restarted to clear in-memory caches and all ten populated again from a genuine cold backend cache.
+- Temporary artwork migration helpers were removed after verification.
+
+Current tested backend source checkpoint:
+
+```text
+2c8ac84 — Add lightweight personalised TIDAL artwork
+```
+
+Companion Pi checkpoint:
+
+```text
+300be7a — Fix personalised TIDAL artwork loading
+```
+
+Next planned personalised-playlist work is PLAY FROM HERE: replace the queue with the selected track followed by all subsequent tracks from the same Mix in original order. It is not implemented yet.
+
 ## 2026-08-31 — Fast personalised TIDAL playback and rich UI backend checkpoint
 
 - Replaced whole-playlist pre-resolution with fast first-track playback followed by generation-controlled background queue construction. Live My Mix 1 testing returned in about **2.343 seconds**, began with Smashing Pumpkins, and completed **39/39 queued, 0 skipped** in the background.
@@ -22,7 +46,7 @@ Key backend checkpoints:
 Current tested backend source checkpoint:
 
 ```text
-66f6345 — Expose personalised TIDAL descriptions
+2c8ac84 — Add lightweight personalised TIDAL artwork
 ```
 
 <!-- TIDAL_BIRTHDAY_HANDOVER_2026_08_29 -->
