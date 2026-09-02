@@ -4,6 +4,15 @@ This is the authoritative short handover for current MarantzPi / HP backend TIDA
 
 ## Current direction
 
+
+## Proactive architecture roadmap
+
+The HP is deliberately an extensible local brain. `marantz-ai.service` (persistent llama.cpp/Qwen) is available beyond the current voice/intent classifier when AI genuinely improves the system. Future chats/developers should proactively identify and propose useful backend services, packages, diagnostics, storage, automation and AI capabilities rather than waiting for the user to suggest them, but must explain and obtain approval before installation or implementation.
+
+Maintain the safety boundary: AI may interpret language/context, assist discovery and explain diagnostics; deterministic/fail-closed code remains authoritative for TIDAL-to-HEOS identity, AVR control and playback/queue mutation.
+
+Active future opportunities to preserve across handovers are: a lightweight SQLite event/playback/command/resolver history store; a unified read-only system health/diagnostic snapshot; richer contextual voice follow-ups; AI-assisted diagnosis from structured evidence; discovery across TIDAL metadata, Discogs-derived collection data and playback history; and, only when justified by a concrete retrieval need, lightweight local embeddings/semantic search. These are roadmap items, not yet implemented features.
+
 The architecture is **official TIDAL API for what the user sees; HEOS for what the user hears**. Official TIDAL supplies personalised recommendations, canonical track/artist/album metadata, descriptions and artwork. HEOS/SR8015 remains playback transport. Existing HEOS browse/search routes remain available as fallback/diagnostic paths, but new catalogue UI should not regress to HEOS browsing when official metadata is available.
 
 Official TIDAL catalogue text search is currently access-blocked for this developer app (400 Invalid resource ID despite read-only search scope). Direct TIDAL playback to the SR8015 is parked.
