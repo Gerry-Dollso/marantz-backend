@@ -1,4 +1,4 @@
-# Current handover — 1 Sep 2026
+# Current handover — 2 Sep 2026
 
 This is the authoritative short handover for current MarantzPi / HP backend TIDAL work. Do not restart the closed Birthday/replacement reconnaissance unless a later code change specifically invalidates the evidence below.
 
@@ -13,6 +13,36 @@ Official TIDAL catalogue text search is currently access-blocked for this develo
 Backend: `Gerry-Dollso/marantz-backend`, branch `local-ai-development`, runtime `/opt/marantz-backend`, system service `marantz-backend.service`, HTTP 3100.
 
 Pi: `Gerry-Dollso/marantzPI`, live branch `housekeeping-2026-08-21`, runtime `~/marantz-now-playing`, user service `marantz-display.service`. Do not casually switch/reset/merge the Pi to `v3-development`; the housekeeping branch is the authoritative deployed line.
+
+Voice: `Gerry-Dollso/marantz-voice`, branch `main`, HP runtime `/opt/marantz-voice`, system service `marantz-voice.service`. The Pi-side sender at `/home/dollso/marantz-voice` is a deployment directory, not a Git checkout, and is managed by `marantz-mic-stream.service`.
+
+## Voice hardware checkpoint — 2 Sep 2026
+
+Voice/ASR development has resumed on the **Seeed Studio ReSpeaker USB Mic Array v2.0 (107990193)**. The former miniDSP UMIK-1 is no longer the active microphone baseline.
+
+The ReSpeaker exposes native 6-channel, 16 kHz, S16_LE audio. The Pi sender now captures that native stream, extracts the processed speech output on channel 0 with ffmpeg, converts it to mono raw 16 kHz S16_LE PCM, and sends it to the HP voice listener on `192.168.50.145:5566`. The pre-ReSpeaker Pi sender is backed up at `/home/dollso/marantz-voice/mic-stream.sh.before-respeaker`.
+
+First end-to-end live verification succeeded without changing Whisper or backend semantics:
+
+```text
+Power test:
+WAKE DETECTED score=0.587
+TRANSCRIPTION: Power on.
+BACKEND RESPONSE: {"ok":true,"state":"on"}
+AVR physically powered on
+
+Artist test:
+WAKE DETECTED score=0.951
+TRANSCRIPTION: Play, IDLES.
+BACKEND RESPONSE: play-artist / IDLES / shuffle=true
+IDLES playback started successfully
+```
+
+One earlier repeated power test produced `Pore on`, so normal ASR variance remains. Initial difficult-title samples were `TANGK -> tank` with the final artist omitted, and `Gift Horse` correctly recognised while `IDLES -> Idola`. The sample is too small to justify gain, AGC, Whisper-model or prompt tuning yet.
+
+A separate touchscreen Now Playing regression displayed `UNKNOWN` while successfully voice-started IDLES was audibly playing. Treat that as a display/status-path issue, not a ReSpeaker/voice failure. Voice testing is temporarily paused at this checkpoint while that unrelated regression is investigated.
+
+Detailed microphone/ASR notes are maintained in the `marantz-voice` README and CHANGELOG.
 
 ## Current tested checkpoints
 
