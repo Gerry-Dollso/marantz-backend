@@ -16,6 +16,20 @@ Pi: `Gerry-Dollso/marantzPI`, live branch `housekeeping-2026-08-21`, runtime `~/
 
 Voice: `Gerry-Dollso/marantz-voice`, branch `main`, HP runtime `/opt/marantz-voice`, system service `marantz-voice.service`. The Pi-side sender at `/home/dollso/marantz-voice` is a deployment directory, not a Git checkout, and is managed by `marantz-mic-stream.service`.
 
+## AVR/HEOS network-path incident — 2 Sep 2026
+
+During ReSpeaker voice testing, `Play, IDLES` succeeded audibly but the Pi Now Playing screen displayed `UNKNOWN`. Direct `/api/status` proved the HEOS side was healthy (`Heel / Heal`, IDLES, Brutalism, artwork/progress) while AVR status had collapsed to `power:unknown`, `input:UNKNOWN`, `volume:null`; `hasTrackInfo` was false because NET could no longer be confirmed.
+
+Direct TCP/23 tests from both Pi and HP established connections to `192.168.50.220:23` but initially received zero bytes for `SI?`, while HEOS port 1255 remained responsive. `marantz-display.service` and `marantz-backend.service` were stopped; `marantz-ai.service` was confirmed to be the llama.cpp model server; no persistent or repeatedly observed short-lived port-23 connections from Pi or HP were found. Rebooting the HP and Pi did not restore `SI?`.
+
+AVR-side attempts included ordinary power/reboot, a firmware update that occurred during troubleshooting, toggling Network Control, and a dedicated Network Settings reset. None by itself restored the silent TCP/23 response. The Network Settings reset also temporarily left all external HEOS music services (`Tidal`, `TuneIn`, Amazon, Deezer, Qobuz, SoundCloud) as `available:false`, while local HEOS sources remained available. The HEOS app and AVR web interface still showed the HEOS account signed in, so do not equate `available:false` with proven logout.
+
+Recovery occurred after a later cold wall-power cycle that included the AVR, Pi and, importantly, the physical network switch serving the AVR. TIDAL and Internet Radio menus returned, and TCP/23 began returning data. A literal byte dump with `od` proved clean CR-terminated Marantz protocol messages including `SINET`, `ZMON`, `MV48`, `MVMAX 80`, `MUOFF`, `Z2OFF` and `Z3OFF`; Termius rendering of CR-only output can look overwritten/garbled and must not be mistaken for malformed AVR bytes. Pi `/api/status` then returned healthy receiver state (`power:on`, `input:TIDAL`, `inputCode:NET`, volume `-32`, mute false), and touchscreen operation was confirmed normal.
+
+**No production code was changed for this incident.** The network switch/path is now a serious suspect because recovery occurred only after the cold cycle that included it, but root cause is **not proven** because multiple devices were cold-cycled together. Do not claim that the switch, firmware, ReSpeaker/voice, or the earlier Pi TCP connection churn independently caused this occurrence.
+
+If the symptom recurs, preserve the fault before resetting anything and capture, in order: direct HEOS 1255 status/metadata, direct AVR TCP/23 response bytes, Pi `/api/status`, sockets/connections from both Pi and HP, and network-switch state. Avoid factory-resetting the AVR or changing production code until those layers are distinguished. The earlier single-connection AVR polling hardening remains in place and is functioning normally after recovery.
+
 ## Voice hardware checkpoint — 2 Sep 2026
 
 Voice/ASR development has resumed on the **Seeed Studio ReSpeaker USB Mic Array v2.0 (107990193)**. The former miniDSP UMIK-1 is no longer the active microphone baseline.
@@ -40,7 +54,7 @@ IDLES playback started successfully
 
 One earlier repeated power test produced `Pore on`, so normal ASR variance remains. Initial difficult-title samples were `TANGK -> tank` with the final artist omitted, and `Gift Horse` correctly recognised while `IDLES -> Idola`. The sample is too small to justify gain, AGC, Whisper-model or prompt tuning yet.
 
-A separate touchscreen Now Playing regression displayed `UNKNOWN` while successfully voice-started IDLES was audibly playing. Treat that as a display/status-path issue, not a ReSpeaker/voice failure. Voice testing is temporarily paused at this checkpoint while that unrelated regression is investigated.
+The `UNKNOWN` Now Playing incident seen during the IDLES test was subsequently isolated as an AVR/network-status-path failure and recovered without a production code change; it is not evidence of a ReSpeaker/voice failure. Voice testing can resume from this checkpoint when desired.
 
 Detailed microphone/ASR notes are maintained in the `marantz-voice` README and CHANGELOG.
 
