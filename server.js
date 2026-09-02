@@ -1071,6 +1071,12 @@ const server = http.createServer(async (req, res) => {
           resolution = await tidalHeosTrustedResolver.resolveTrack(target);
         } catch (error) {
           if (!tidalQueueBuildIsCurrent(queueGeneration)) break;
+          if (startTrackId && index === 0) {
+            return sendJson(res, 409, {
+              ok: false,
+              error: 'Selected Play From Here track could not be resolved safely'
+            });
+          }
           skippedCount += 1;
           console.warn(
             'TIDAL RESOLVED PLAYLIST RESOLUTION SKIP:',
@@ -1091,6 +1097,12 @@ const server = http.createServer(async (req, res) => {
           !resolution.cid ||
           !resolution.mid
         ) {
+          if (startTrackId && index === 0) {
+            return sendJson(res, 409, {
+              ok: false,
+              error: 'Selected Play From Here track could not be resolved safely'
+            });
+          }
           skippedCount += 1;
           logUnresolvedSkip(index, target, resolution);
           continue;
@@ -1101,6 +1113,12 @@ const server = http.createServer(async (req, res) => {
           await queueResolvedTrack(target, resolution, 4);
         } catch (error) {
           if (!tidalQueueBuildIsCurrent(queueGeneration)) break;
+          if (startTrackId && index === 0) {
+            return sendJson(res, 502, {
+              ok: false,
+              error: 'Selected Play From Here track could not be queued'
+            });
+          }
           skippedCount += 1;
           logQueueSkip(index, target, resolution, error);
           continue;
