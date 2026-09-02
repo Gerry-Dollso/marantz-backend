@@ -11,7 +11,7 @@ The HP is deliberately an extensible local brain. `marantz-ai.service` (persiste
 
 Maintain the safety boundary: AI may interpret language/context, assist discovery and explain diagnostics; deterministic/fail-closed code remains authoritative for TIDAL-to-HEOS identity, AVR control and playback/queue mutation.
 
-Active future opportunities to preserve across handovers are: a lightweight SQLite event/playback/command/resolver history store; a unified read-only system health/diagnostic snapshot; richer contextual voice follow-ups; AI-assisted diagnosis from structured evidence; discovery across TIDAL metadata, Discogs-derived collection data and playback history; and, only when justified by a concrete retrieval need, lightweight local embeddings/semantic search. These are roadmap items, not yet implemented features.
+Active future opportunities to preserve across handovers are: a lightweight SQLite event/playback/command/resolver history store; a unified read-only system health/diagnostic snapshot; a Current Queue view/control surface (read-only first, with current/upcoming tracks and available artwork/metadata, then optional play/remove/reorder/clear controls later); richer contextual voice follow-ups; AI-assisted diagnosis from structured evidence; discovery across TIDAL metadata, Discogs-derived collection data and playback history; and, only when justified by a concrete retrieval need, lightweight local embeddings/semantic search. These are roadmap items, not yet implemented features.
 
 The architecture is **official TIDAL API for what the user sees; HEOS for what the user hears**. Official TIDAL supplies personalised recommendations, canonical track/artist/album metadata, descriptions and artwork. HEOS/SR8015 remains playback transport. Existing HEOS browse/search routes remain available as fallback/diagnostic paths, but new catalogue UI should not regress to HEOS browsing when official metadata is available.
 
@@ -69,9 +69,13 @@ Detailed microphone/ASR notes are maintained in the `marantz-voice` README and C
 
 ## Current tested checkpoints
 
-Backend source checkpoint: `2c8ac84 — Add lightweight personalised TIDAL artwork`.
+Backend tested functional source checkpoint: `ad56d23 — Require selected My Mix track for play from here`.
 
-Pi source checkpoint: `300be7a — Fix personalised TIDAL artwork loading`.
+Backend clean repository checkpoint after migration-helper removal: `9ac4924 — Remove strict play from here helper`.
+
+Pi tested functional source checkpoint: `041b035 — Make TIDAL track actions reusable`.
+
+Pi current repository/documentation checkpoint: `0769f88 — Remove Play From Here documentation helper`.
 
 The Pi landing page for My Mix 1-8, My Daily Discovery and My New Arrivals renders official TIDAL names/descriptions immediately, then progressively fills each card with a 2x2 collage from up to four distinct official album covers. Landing artwork now uses a dedicated first-page-only backend endpoint with an independent 30-minute cache. Pi enrichment is sequential and a failed card receives one delayed retry. End-to-end testing populated all ten cards from a genuinely cold backend cache. Personalised track rows show official artwork, title, artist and album.
 
@@ -122,7 +126,7 @@ Do **not** redo Early Alternative discovery, ordinary HEOS playlist visibility, 
 
 Landing-card artwork uses the separate `GET /api/tidal/personalised/artwork?id=<playlistId>` endpoint. On a cold artwork/full-playlist cache it fetches only the first official playlist page and returns up to four distinct artwork URLs; it does not paginate. Artwork has an independent 30-minute cache, and a warm full-playlist cache can satisfy it with no additional TIDAL request. The Pi loads these requests sequentially and retries only a failed card once after two seconds.
 
-Personalised PLAY ALL / SHUFFLE ALL are live. Individual tracks support PLAY NOW, PLAY NEXT, ADD TO END and PLAY ONLY. PLAY FROM HERE remains deliberately unavailable for My Mixes for now. The next implementation should replace the current queue with the selected personalised track followed by every later track from the same Mix in original order, preserving existing deterministic resolution, background queue-building and generation-cancellation safety.
+Personalised PLAY ALL / SHUFFLE ALL are live. Individual tracks support PLAY NOW, PLAY NEXT, ADD TO END, PLAY FROM HERE and PLAY ONLY. PLAY FROM HERE sends the personalised playlist ID plus the exact official selected track ID, rejects shuffle, verifies the selected track belongs to the fetched Mix, slices the queue from that exact position and preserves the existing deterministic resolver, first-track `aid=4`, background `aid=3` builder and generation-cancellation safety. The selected first track is strict/fail-closed: if it cannot resolve or queue safely, the request fails rather than silently starting the following track; later unresolved tracks retain the normal safe-skip background behaviour. Live touchscreen acceptance confirmed exact selected-track starts, repeated PLAY FROM HERE use, and the final-track boundary where NEXT does not start an unrelated track. The Pi shared track-action lifecycle now clears disabled/loading state in `finally`, so these actions remain reusable.
 
 ## Working discipline
 

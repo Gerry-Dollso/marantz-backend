@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-09-02 — Personalised TIDAL PLAY FROM HERE
+
+- Added personalised My Mix PLAY FROM HERE using the existing official-TIDAL-to-HEOS queue architecture. The request carries the personalised playlist ID plus the exact official selected track ID; it does not fall back to a generic HEOS container action.
+- The backend validates the selected track ID, rejects PLAY FROM HERE combined with shuffle, confirms the track belongs to the freshly fetched personalised playlist and slices the queue from that exact position onward.
+- Preserved deterministic playback safety: the selected first track must resolve and queue successfully or the request fails closed. It is never silently replaced by the following track. Later tracks keep the existing safe-skip behaviour used by the background queue builder.
+- Preserved fast queue semantics: selected first track uses `aid=4`, the response returns promptly, remaining tracks build sequentially with `aid=3`, and generation checks cancel superseded builds.
+- Companion Pi work added the My Mix action routing and fixed the shared action-button lifecycle so disabled/loading state is always cleared in `finally`, making PLAY FROM HERE and other shared actions reusable.
+- Live acceptance confirmed the exact selected track starts, repeated PLAY FROM HERE works, selecting the final track produces a one-track tail, and NEXT after that final track does not start an unrelated item.
+- A touchscreen Current Queue view is now a follow-up roadmap item: read-only first, showing current/upcoming tracks with available artwork/title/artist/album metadata, with queue editing considered separately later.
+
+Backend implementation/checkpoint sequence includes:
+
+```text
+1b9934a — Add personalised TIDAL play from here
+ad56d23 — Require selected My Mix track for play from here
+9ac4924 — Remove strict play from here helper
+```
+
+Companion Pi functional checkpoint:
+
+```text
+041b035 — Make TIDAL track actions reusable
+```
+
 ## 2026-09-02 — AVR/HEOS network-path incident and recovery
 
 - Investigated a live failure where voice-started IDLES playback succeeded but MarantzPi Now Playing displayed `UNKNOWN`. HEOS metadata remained valid while AVR TCP/23 status was unavailable.
