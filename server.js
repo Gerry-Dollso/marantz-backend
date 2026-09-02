@@ -935,6 +935,7 @@ const server = http.createServer(async (req, res) => {
 
       const url = new URL(req.url, 'http://localhost');
       const id = String(url.searchParams.get('id') || '').trim();
+      const startTrackId = String(url.searchParams.get('start') || '').trim();
       const shuffleValue = String(url.searchParams.get('shuffle') || '0').trim();
 
       if (!/^[a-zA-Z0-9]+$/.test(id)) {
@@ -957,7 +958,28 @@ const server = http.createServer(async (req, res) => {
         });
       }
 
-      const queueTracks = sourceTracks.slice();
+      let queueTracks = sourceTracks.slice();
+      if (startTrackId) {
+        if (!/^\d+$/.test(startTrackId)) {
+          return sendJson(res, 400, { ok: false, error: 'Invalid start track id' });
+        }
+        if (shuffle) {
+          return sendJson(res, 400, {
+            ok: false,
+            error: 'Play From Here cannot be combined with shuffle'
+          });
+        }
+        const startIndex = queueTracks.findIndex(
+          track => String(track.id || '') === startTrackId
+        );
+        if (startIndex < 0) {
+          return sendJson(res, 409, {
+            ok: false,
+            error: 'Selected track is not in this personalised playlist'
+          });
+        }
+        queueTracks = queueTracks.slice(startIndex);
+      }
       if (shuffle) {
         for (let i = queueTracks.length - 1; i > 0; i -= 1) {
           const j = Math.floor(Math.random() * (i + 1));
