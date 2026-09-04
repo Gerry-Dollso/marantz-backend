@@ -25,6 +25,20 @@ Pi: `Gerry-Dollso/marantzPI`, live branch `housekeeping-2026-08-21`, runtime `~/
 
 Voice: `Gerry-Dollso/marantz-voice`, branch `main`, HP runtime `/opt/marantz-voice`, system service `marantz-voice.service`. The Pi-side sender at `/home/dollso/marantz-voice` is a deployment directory, not a Git checkout, and is managed by `marantz-mic-stream.service`.
 
+## AVR TCP/23 recurrence — 4 Sep 2026
+
+A second spontaneous `UNKNOWN` incident occurred during ordinary PHONO/vinyl listening, without voice/ReSpeaker activity. MarantzPi could still send source/volume commands, but no source was highlighted. Pi `/api/status` retained HEOS-side metadata but showed AVR state as `power:unknown`, `input:UNKNOWN`, `inputCode:UNKNOWN`, `volume:null`.
+
+The live fault was preserved before recovery. From both Pi and HP, TCP connections to `192.168.50.220:23` succeeded but `SI?` returned zero bytes. HEOS port 1255 remained healthy and returned the SR8015 normally. The Pi Node poller showed two transient established TCP/23 sockets whose local ports changed across samples, demonstrating cycling/timeout behaviour rather than permanently stuck sockets. The HP held no persistent TCP/23 socket.
+
+`marantz-display.service` was then stopped and its TCP/23 sockets disappeared. Independent HP `SI?` probes remained silent after 10 seconds and again after more than one minute with zero Pi polling, so Pi polling is not required to maintain the wedged state. A passive 10-second TCP/23 listen also received no bytes.
+
+Recovery was isolated much more tightly than on 2 Sep: with the Pi display still stopped and the HP/network switch untouched, the SR8015 alone was put into normal standby, left for about 10 seconds, and powered back on. HP `SI?` immediately returned `SI8K\r` (plus `SVOFF\r`) and returned the same result again 10 seconds later. `SI8K` correctly matched the configured PHONO/Technics SL-1210G source. MarantzPi was then restarted and normal source display was confirmed.
+
+This materially weakens the earlier suspicion of the external network switch and the ReSpeaker/voice path. Current evidence strongly localises the failure to the SR8015 or its internal network/control subsystem: TCP/23 accepts connections but becomes silent while HEOS remains healthy, and a normal AVR-only standby/on cycle can recover it. The exact trigger/root cause is still unproven. Do not claim a specific internal firmware/service defect without further evidence.
+
+For a future recurrence, preserve the live fault first. The shortest proven diagnostic set is: raw `SI?` bytes from Pi and HP, HEOS 1255 health, Pi `/api/status`, and Pi/HP TCP/23 sockets. If those reproduce this exact signature, an AVR-only normal standby/on cycle is now the least-invasive proven recovery to try before network resets, host reboots or wall-power cycling.
+
 ## AVR/HEOS network-path incident — 2 Sep 2026
 
 During ReSpeaker voice testing, `Play, IDLES` succeeded audibly but the Pi Now Playing screen displayed `UNKNOWN`. Direct `/api/status` proved the HEOS side was healthy (`Heel / Heal`, IDLES, Brutalism, artwork/progress) while AVR status had collapsed to `power:unknown`, `input:UNKNOWN`, `volume:null`; `hasTrackInfo` was false because NET could no longer be confirmed.

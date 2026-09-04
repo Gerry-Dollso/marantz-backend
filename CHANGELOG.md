@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-09-04 — AVR TCP/23 recurrence isolated to AVR recovery
+
+- A second spontaneous `UNKNOWN` source/status failure occurred during ordinary PHONO/vinyl listening, without voice/ReSpeaker activity.
+- Both Pi and HP could establish TCP/23 connections to the SR8015 but received zero bytes for `SI?`; HEOS port 1255 remained healthy. Pi `/api/status` showed `power:unknown`, `input:UNKNOWN`, `inputCode:UNKNOWN` and `volume:null`.
+- Pi TCP/23 sockets were transient/cycling rather than permanently stuck. Stopping `marantz-display.service` removed all Pi TCP/23 activity, but independent HP queries remained silent after more than a minute, showing Pi polling was not required to maintain the fault.
+- With Pi polling still stopped, only the SR8015 was put into normal standby for about 10 seconds and powered back on. No HP, Pi or network-switch reboot/reset was performed.
+- AVR-only standby/on restored TCP/23 immediately and stably: repeated HP `SI?` probes returned `SI8K`, correctly identifying the configured PHONO/Technics input. MarantzPi was restarted and normal display operation was confirmed.
+- This materially weakens the 2 Sep external-switch and voice/ReSpeaker suspicions. Evidence now strongly localises the failure/recovery to the SR8015 or its internal network/control subsystem, but the trigger/root cause remains unproven.
+- For the same signature in future, preserve evidence first; AVR-only normal standby/on is now the least-invasive proven recovery before broader resets or cold power cycling.
+
 ## 2026-09-02 — Personalised TIDAL PLAY FROM HERE
 
 - Added personalised My Mix PLAY FROM HERE using the existing official-TIDAL-to-HEOS queue architecture. The request carries the personalised playlist ID plus the exact official selected track ID; it does not fall back to a generic HEOS container action.
