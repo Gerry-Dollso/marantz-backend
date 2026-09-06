@@ -12,8 +12,7 @@ const HEOS_SID = '10';
 const HEOS_CID = 'My Music-Tracks';
 const ENV_FILE = '/etc/marantz-backend/tidal.env';
 const REFRESH_TOKEN_FILE = '/etc/marantz-backend/tidal-refresh-token';
-const DETAIL_LIMIT = Math.min(50, Math.max(0, Number(process.argv[2]) || 20));
-
+const DETAIL_LIMIT = Math.min(100, Math.max(1, Number(process.argv[2]) || 50));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function parseEnvFile(pathname) {
@@ -25,8 +24,7 @@ function parseEnvFile(pathname) {
     const match = line.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
     if (!match) continue;
     let value = match[2].trim();
-    if ((value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
     values[match[1]] = value;
   }
   return values;
@@ -44,10 +42,7 @@ async function getAccessToken() {
     body: new URLSearchParams({ grant_type: 'refresh_token', client_id: clientId, refresh_token: refreshToken })
   });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok || !payload.access_token) {
-    const detail = payload.error_description || payload.error || `HTTP ${response.status}`;
-    throw new Error(`TIDAL token refresh failed: ${detail}`);
-  }
+  if (!response.ok || !payload.access_token) throw new Error(`TIDAL token refresh failed: ${payload.error_description || payload.error || `HTTP ${response.status}`}`);
   return String(payload.access_token);
 }
 
@@ -55,40 +50,30 @@ function absoluteTidalUrl(value) {
   const text = String(value || '').trim();
   if (!text) return '';
   if (/^https?:\/\//i.test(text)) return text;
-  if (text.startsWith('/')) return API_BASE + text;
-  return API_BASE + '/' + text;
+  return text.startsWith('/') ? API_BASE + text : API_BASE + '/' + text;
 }
 
 async function tidalGetUrl(accessToken, url) {
-  const response = await fetch(absoluteTidalUrl(url), {
-    headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/vnd.api+json' }
-  });
+  const response = await fetch(absoluteTidalUrl(url), { headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/vnd.api+json' } });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const detail = payload?.errors?.[0]?.detail || payload?.detail || `HTTP ${response.status}`;
-    throw new Error(`TIDAL ${response.status}: ${detail}`);
-  }
+  if (!response.ok) throw new Error(`TIDAL ${response.status}: ${payload?.errors?.[0]?.detail || payload?.detail || `HTTP ${response.status}`}`);
   return payload;
 }
 
 async function getAllOfficialFavouriteTrackIds(accessToken) {
   let next = '/userCollectionTracks/me/relationships/items?countryCode=' + encodeURIComponent(COUNTRY_CODE);
   const ids = [];
-  const pages = [];
   const seenUrls = new Set();
+  let pages = 0;
   while (next) {
     const absoluteNext = absoluteTidalUrl(next);
     if (seenUrls.has(absoluteNext)) throw new Error('Repeated TIDAL pagination URL');
-    if (pages.length >= 250) throw new Error('TIDAL pagination safety limit reached');
+    if (pages >= 250) throw new Error('TIDAL pagination safety limit reached');
     seenUrls.add(absoluteNext);
-    const startedAt = process.hrtime.bigint();
     const payload = await tidalGetUrl(accessToken, absoluteNext);
-    const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
     const data = Array.isArray(payload?.data) ? payload.data : [];
-    for (const item of data) {
-      if (item?.type === 'tracks' && /^\d+$/.test(String(item.id || ''))) ids.push(String(item.id));
-    }
-    pages.push({ page: pages.length + 1, count: data.length, elapsedMs: Math.round(elapsedMs * 10) / 10 });
+    for (const item of data) if (item?.type === 'tracks' && /^\d+$/.test(String(item.id || ''))) ids.push(String(item.id));
+    pages += 1;
     next = payload?.links?.next || null;
     if (next) await sleep(1000);
   }
@@ -120,8 +105,7 @@ function heosBrowse(command, timeoutMs = 15000) {
           if (!response.heos) continue;
           if (response.heos.result === 'fail') return finish(new Error(response.heos.message || 'HEOS browse failed'));
           if (Array.isArray(response.payload)) return finish(null, response);
-          const message = String(response.heos.message || '');
-          if (!message.includes('command under process')) return finish(null, response);
+          if (!String(response.heos.message || '').includes('command under process')) return finish(null, response);
         } catch {}
       }
     });
@@ -132,40 +116,27 @@ function heosBrowse(command, timeoutMs = 15000) {
 }
 
 async function getAllHeosFavouriteTracks() {
-  const pageSize = 50;
   const items = [];
   let start = 0;
   let total = null;
   while (total === null || start < total) {
-    const response = await heosBrowse('heos://browse/browse?sid=' + HEOS_SID + '&cid=' + HEOS_CID + '&range=' + start + ',' + (start + pageSize - 1));
+    const response = await heosBrowse('heos://browse/browse?sid=' + HEOS_SID + '&cid=' + HEOS_CID + '&range=' + start + ',' + (start + 49));
     const payload = Array.isArray(response.payload) ? response.payload : [];
     items.push(...payload);
-    const message = String(response.heos?.message || '');
-    const countMatch = message.match(/(?:^|&)count=(\d+)/);
-    if (countMatch) total = Number(countMatch[1]);
+    const match = String(response.heos?.message || '').match(/(?:^|&)count=(\d+)/);
+    if (match) total = Number(match[1]);
     if (!payload.length) break;
     start += payload.length;
-    if (total === null && payload.length < pageSize) break;
+    if (total === null && payload.length < 50) break;
   }
-  return items.map((item, index) => ({
-    position: index,
+  return items.map((item, position) => ({
+    position,
     mid: String(item.mid || ''),
     title: String(item.name || ''),
     artist: String(item.artist || ''),
     album: String(item.album || ''),
-    albumId: String(item.album_id || ''),
-    imageUrl: String(item.image_url || '')
+    albumId: String(item.album_id || '')
   }));
-}
-
-function countIds(ids) {
-  const counts = new Map();
-  for (const id of ids) counts.set(id, (counts.get(id) || 0) + 1);
-  return counts;
-}
-
-function duplicateSummary(ids) {
-  return [...countIds(ids).entries()].filter(([, count]) => count > 1).map(([id, count]) => ({ id, count }));
 }
 
 function uniqueInOrder(ids) {
@@ -177,72 +148,73 @@ function uniqueInOrder(ids) {
   });
 }
 
+function buildAnchorGaps(officialIds, heosTracks) {
+  const heosIds = heosTracks.map(item => item.mid);
+  const officialSet = new Set(officialIds);
+  const heosSet = new Set(heosIds);
+  const anchors = officialIds.filter(id => heosSet.has(id));
+  const officialPositions = new Map(officialIds.map((id, index) => [id, index]));
+  const firstHeosPositions = new Map();
+  heosIds.forEach((id, index) => { if (!firstHeosPositions.has(id)) firstHeosPositions.set(id, index); });
+  const gaps = [];
+
+  for (let anchorIndex = -1; anchorIndex < anchors.length; anchorIndex += 1) {
+    const beforeId = anchorIndex >= 0 ? anchors[anchorIndex] : null;
+    const afterId = anchorIndex + 1 < anchors.length ? anchors[anchorIndex + 1] : null;
+    const officialStart = beforeId === null ? 0 : officialPositions.get(beforeId) + 1;
+    const officialEnd = afterId === null ? officialIds.length : officialPositions.get(afterId);
+    const heosStart = beforeId === null ? 0 : firstHeosPositions.get(beforeId) + 1;
+    const heosEnd = afterId === null ? heosIds.length : firstHeosPositions.get(afterId);
+    const officialExtras = officialIds.slice(officialStart, officialEnd).filter(id => !heosSet.has(id));
+    const heosExtras = heosTracks.slice(heosStart, heosEnd).filter(item => officialSet.has(item.mid));
+    if (!officialExtras.length && !heosExtras.length) continue;
+    gaps.push({
+      beforeAnchor: beforeId,
+      afterAnchor: afterId,
+      officialRange: [officialStart, officialEnd - 1],
+      heosRange: [heosStart, heosEnd - 1],
+      officialStaleIds: officialExtras,
+      heosExtraRows: heosExtras.map(item => ({ position: item.position, mid: item.mid, title: item.title, artist: item.artist, album: item.album, albumId: item.albumId })),
+      countsMatch: officialExtras.length === heosExtras.length
+    });
+  }
+  return gaps;
+}
+
 async function main() {
-  console.log('READ-ONLY Favourite Tracks positional correlation probe');
-  console.log(`Positional detail limit: ${DETAIL_LIMIT}`);
+  console.log('READ-ONLY Favourite Tracks shared-anchor alignment probe');
+  console.log(`Gap detail limit: ${DETAIL_LIMIT}`);
   const accessToken = await getAccessToken();
   const [official, heosTracks] = await Promise.all([getAllOfficialFavouriteTrackIds(accessToken), getAllHeosFavouriteTracks()]);
   const officialIds = official.ids;
   const heosIds = heosTracks.map(item => item.mid);
-  const officialSet = new Set(officialIds);
   const heosSet = new Set(heosIds);
-  const officialOnlyPositions = officialIds.map((id, position) => ({ id, position })).filter(item => !heosSet.has(item.id));
-  const heosCounts = countIds(heosIds);
-  const heosSeen = new Map();
-  const duplicateOccurrences = [];
-  heosTracks.forEach(item => {
-    const occurrence = (heosSeen.get(item.mid) || 0) + 1;
-    heosSeen.set(item.mid, occurrence);
-    if (occurrence > 1) duplicateOccurrences.push({ ...item, occurrence, totalOccurrences: heosCounts.get(item.mid) });
-  });
+  const officialSet = new Set(officialIds);
   const officialLive = officialIds.filter(id => heosSet.has(id));
   const heosUnique = uniqueInOrder(heosIds);
+  const gaps = buildAnchorGaps(officialIds, heosTracks);
+  const officialStaleTotal = officialIds.filter(id => !heosSet.has(id)).length;
+  const heosExcessTotal = heosIds.length - new Set(heosIds).size;
+  const allGapCountsMatch = gaps.every(gap => gap.countsMatch);
+  const gapOfficialTotal = gaps.reduce((sum, gap) => sum + gap.officialStaleIds.length, 0);
+  const gapHeosTotal = gaps.reduce((sum, gap) => sum + gap.heosExtraRows.length, 0);
   const dedupedSameOrder = officialLive.length === heosUnique.length && officialLive.every((id, index) => id === heosUnique[index]);
-  const rowMatches = officialIds.reduce((count, id, index) => count + (id === heosIds[index] ? 1 : 0), 0);
-  const staleRows = officialOnlyPositions.map(({ id, position }) => {
-    const at = heosTracks[position] || null;
-    const before = position > 0 ? heosTracks[position - 1] : null;
-    const after = position + 1 < heosTracks.length ? heosTracks[position + 1] : null;
-    return {
-      position,
-      officialStaleId: id,
-      heosAtSamePosition: at ? { mid: at.mid, title: at.title, artist: at.artist, album: at.album, albumId: at.albumId, duplicateTotal: heosCounts.get(at.mid) } : null,
-      heosBefore: before ? { position: before.position, mid: before.mid, title: before.title, artist: before.artist } : null,
-      heosAfter: after ? { position: after.position, mid: after.mid, title: after.title, artist: after.artist } : null
-    };
-  });
-  const summary = {
-    officialTrackCount: officialIds.length,
-    officialUniqueCount: new Set(officialIds).size,
-    heosTrackCount: heosIds.length,
-    heosUniqueMidCount: heosSet.size,
-    exactIdOverlapUnique: [...officialSet].filter(id => heosSet.has(id)).length,
-    officialOnlyCount: officialOnlyPositions.length,
-    heosUniqueOnlyCount: [...heosSet].filter(id => !officialSet.has(id)).length,
-    heosDuplicateIdCount: duplicateSummary(heosIds).length,
-    heosDuplicateExcessOccurrences: heosIds.length - heosSet.size,
-    samePositionRowMatches: rowMatches,
-    officialLiveCount: officialLive.length,
-    heosDedupedCount: heosUnique.length,
-    dedupedSameOrder
-  };
   console.log('\nSUMMARY');
-  console.log(JSON.stringify(summary, null, 2));
-  console.log('\nHEOS DUPLICATE IDS');
-  console.log(JSON.stringify(duplicateSummary(heosIds), null, 2));
-  console.log('\nOFFICIAL STALE POSITIONS WITH HEOS NEIGHBOURS');
-  console.log(JSON.stringify(staleRows.slice(0, DETAIL_LIMIT), null, 2));
-  console.log('\nHEOS EXTRA DUPLICATE OCCURRENCES');
-  console.log(JSON.stringify(duplicateOccurrences.slice(0, DETAIL_LIMIT), null, 2));
-  if (!dedupedSameOrder) {
-    const firstDifferences = [];
-    const limit = Math.max(officialLive.length, heosUnique.length);
-    for (let i = 0; i < limit && firstDifferences.length < DETAIL_LIMIT; i += 1) {
-      if (officialLive[i] !== heosUnique[i]) firstDifferences.push({ position: i, officialLiveId: officialLive[i] || null, heosUniqueMid: heosUnique[i] || null });
-    }
-    console.log('\nDEDUPED ORDER DIFFERENCES');
-    console.log(JSON.stringify(firstDifferences, null, 2));
-  }
+  console.log(JSON.stringify({
+    officialTrackCount: officialIds.length,
+    heosTrackCount: heosIds.length,
+    sharedUniqueTrackCount: officialLive.length,
+    officialStaleTotal,
+    heosExcessDuplicateTotal: heosExcessTotal,
+    dedupedSameOrder,
+    nonEmptyGapCount: gaps.length,
+    gapOfficialStaleTotal: gapOfficialTotal,
+    gapHeosExtraTotal: gapHeosTotal,
+    allGapCountsMatch,
+    exactStructuralAlignment: dedupedSameOrder && officialStaleTotal === heosExcessTotal && gapOfficialTotal === officialStaleTotal && gapHeosTotal === heosExcessTotal && allGapCountsMatch
+  }, null, 2));
+  console.log('\nANCHOR GAPS');
+  console.log(JSON.stringify(gaps.slice(0, DETAIL_LIMIT), null, 2));
 }
 
 main().catch(error => {
