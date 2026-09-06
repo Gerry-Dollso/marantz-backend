@@ -150,35 +150,51 @@ function uniqueInOrder(ids) {
 
 function buildAnchorGaps(officialIds, heosTracks) {
   const heosIds = heosTracks.map(item => item.mid);
-  const officialSet = new Set(officialIds);
   const heosSet = new Set(heosIds);
   const anchors = officialIds.filter(id => heosSet.has(id));
-  const officialPositions = new Map(officialIds.map((id, index) => [id, index]));
-  const firstHeosPositions = new Map();
-  heosIds.forEach((id, index) => { if (!firstHeosPositions.has(id)) firstHeosPositions.set(id, index); });
-  const gaps = [];
+  const gaps = Array.from({ length: anchors.length + 1 }, (_, index) => ({
+    beforeAnchor: index > 0 ? anchors[index - 1] : null,
+    afterAnchor: index < anchors.length ? anchors[index] : null,
+    officialStaleIds: [],
+    heosExtraRows: []
+  }));
 
-  for (let anchorIndex = -1; anchorIndex < anchors.length; anchorIndex += 1) {
-    const beforeId = anchorIndex >= 0 ? anchors[anchorIndex] : null;
-    const afterId = anchorIndex + 1 < anchors.length ? anchors[anchorIndex + 1] : null;
-    const officialStart = beforeId === null ? 0 : officialPositions.get(beforeId) + 1;
-    const officialEnd = afterId === null ? officialIds.length : officialPositions.get(afterId);
-    const heosStart = beforeId === null ? 0 : firstHeosPositions.get(beforeId) + 1;
-    const heosEnd = afterId === null ? heosIds.length : firstHeosPositions.get(afterId);
-    const officialExtras = officialIds.slice(officialStart, officialEnd).filter(id => !heosSet.has(id));
-    const heosExtras = heosTracks.slice(heosStart, heosEnd).filter(item => officialSet.has(item.mid));
-    if (!officialExtras.length && !heosExtras.length) continue;
-    gaps.push({
-      beforeAnchor: beforeId,
-      afterAnchor: afterId,
-      officialRange: [officialStart, officialEnd - 1],
-      heosRange: [heosStart, heosEnd - 1],
-      officialStaleIds: officialExtras,
-      heosExtraRows: heosExtras.map(item => ({ position: item.position, mid: item.mid, title: item.title, artist: item.artist, album: item.album, albumId: item.albumId })),
-      countsMatch: officialExtras.length === heosExtras.length
-    });
+  let officialAnchorIndex = 0;
+  for (const id of officialIds) {
+    if (heosSet.has(id)) {
+      if (id !== anchors[officialAnchorIndex]) throw new Error('Official anchor order mismatch');
+      officialAnchorIndex += 1;
+    } else {
+      gaps[officialAnchorIndex].officialStaleIds.push(id);
+    }
   }
-  return gaps;
+
+  const seenHeos = new Set();
+  let heosAnchorIndex = 0;
+  for (const item of heosTracks) {
+    if (!seenHeos.has(item.mid)) {
+      seenHeos.add(item.mid);
+      if (item.mid !== anchors[heosAnchorIndex]) throw new Error(`HEOS anchor order mismatch at unique index ${heosAnchorIndex}`);
+      heosAnchorIndex += 1;
+    } else {
+      gaps[heosAnchorIndex].heosExtraRows.push({
+        position: item.position,
+        mid: item.mid,
+        title: item.title,
+        artist: item.artist,
+        album: item.album,
+        albumId: item.albumId
+      });
+    }
+  }
+
+  return gaps.filter(gap => gap.officialStaleIds.length || gap.heosExtraRows.length).map(gap => ({
+    ...gap,
+    countsMatch: gap.officialStaleIds.length === gap.heosExtraRows.length,
+    structuralPairs: gap.officialStaleIds.length === gap.heosExtraRows.length
+      ? gap.officialStaleIds.map((staleId, index) => ({ staleOfficialId: staleId, heosReplacementCandidate: gap.heosExtraRows[index] }))
+      : []
+  }));
 }
 
 async function main() {
@@ -189,16 +205,19 @@ async function main() {
   const officialIds = official.ids;
   const heosIds = heosTracks.map(item => item.mid);
   const heosSet = new Set(heosIds);
-  const officialSet = new Set(officialIds);
   const officialLive = officialIds.filter(id => heosSet.has(id));
   const heosUnique = uniqueInOrder(heosIds);
+  const dedupedSameOrder = officialLive.length === heosUnique.length && officialLive.every((id, index) => id === heosUnique[index]);
+  if (!dedupedSameOrder) throw new Error('Cannot perform anchor-gap alignment because de-duplicated anchor order differs');
   const gaps = buildAnchorGaps(officialIds, heosTracks);
   const officialStaleTotal = officialIds.filter(id => !heosSet.has(id)).length;
   const heosExcessTotal = heosIds.length - new Set(heosIds).size;
-  const allGapCountsMatch = gaps.every(gap => gap.countsMatch);
   const gapOfficialTotal = gaps.reduce((sum, gap) => sum + gap.officialStaleIds.length, 0);
   const gapHeosTotal = gaps.reduce((sum, gap) => sum + gap.heosExtraRows.length, 0);
-  const dedupedSameOrder = officialLive.length === heosUnique.length && officialLive.every((id, index) => id === heosUnique[index]);
+  const matchedGapCount = gaps.filter(gap => gap.countsMatch).length;
+  const unmatchedGaps = gaps.filter(gap => !gap.countsMatch);
+  const exactStructuralAlignment = officialStaleTotal === heosExcessTotal && gapOfficialTotal === officialStaleTotal && gapHeosTotal === heosExcessTotal && unmatchedGaps.length === 0;
+
   console.log('\nSUMMARY');
   console.log(JSON.stringify({
     officialTrackCount: officialIds.length,
@@ -208,11 +227,13 @@ async function main() {
     heosExcessDuplicateTotal: heosExcessTotal,
     dedupedSameOrder,
     nonEmptyGapCount: gaps.length,
+    matchedGapCount,
+    unmatchedGapCount: unmatchedGaps.length,
     gapOfficialStaleTotal: gapOfficialTotal,
     gapHeosExtraTotal: gapHeosTotal,
-    allGapCountsMatch,
-    exactStructuralAlignment: dedupedSameOrder && officialStaleTotal === heosExcessTotal && gapOfficialTotal === officialStaleTotal && gapHeosTotal === heosExcessTotal && allGapCountsMatch
+    exactStructuralAlignment
   }, null, 2));
+
   console.log('\nANCHOR GAPS');
   console.log(JSON.stringify(gaps.slice(0, DETAIL_LIMIT), null, 2));
 }
