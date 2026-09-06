@@ -12,7 +12,7 @@ const HEOS_SID = '10';
 const HEOS_CID = 'My Music-Tracks';
 const ENV_FILE = '/etc/marantz-backend/tidal.env';
 const REFRESH_TOKEN_FILE = '/etc/marantz-backend/tidal-refresh-token';
-const DETAIL_LIMIT = Math.min(30, Math.max(0, Number(process.argv[2]) || 10));
+const DETAIL_LIMIT = Math.min(50, Math.max(0, Number(process.argv[2]) || 20));
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -26,9 +26,7 @@ function parseEnvFile(pathname) {
     if (!match) continue;
     let value = match[2].trim();
     if ((value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
+        (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
     values[match[1]] = value;
   }
   return values;
@@ -40,18 +38,10 @@ async function getAccessToken() {
   const refreshToken = fs.readFileSync(REFRESH_TOKEN_FILE, 'utf8').trim();
   if (!clientId) throw new Error('TIDAL_CLIENT_ID is missing');
   if (!refreshToken) throw new Error('TIDAL refresh token is missing');
-
   const response = await fetch(TOKEN_URL, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      Accept: 'application/json'
-    },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      client_id: clientId,
-      refresh_token: refreshToken
-    })
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body: new URLSearchParams({ grant_type: 'refresh_token', client_id: clientId, refresh_token: refreshToken })
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || !payload.access_token) {
@@ -71,10 +61,7 @@ function absoluteTidalUrl(value) {
 
 async function tidalGetUrl(accessToken, url) {
   const response = await fetch(absoluteTidalUrl(url), {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      Accept: 'application/vnd.api+json'
-    }
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/vnd.api+json' }
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -85,36 +72,26 @@ async function tidalGetUrl(accessToken, url) {
 }
 
 async function getAllOfficialFavouriteTrackIds(accessToken) {
-  let next = '/userCollectionTracks/me/relationships/items?countryCode=' +
-    encodeURIComponent(COUNTRY_CODE);
+  let next = '/userCollectionTracks/me/relationships/items?countryCode=' + encodeURIComponent(COUNTRY_CODE);
   const ids = [];
   const pages = [];
   const seenUrls = new Set();
-
   while (next) {
     const absoluteNext = absoluteTidalUrl(next);
     if (seenUrls.has(absoluteNext)) throw new Error('Repeated TIDAL pagination URL');
     if (pages.length >= 250) throw new Error('TIDAL pagination safety limit reached');
     seenUrls.add(absoluteNext);
-
     const startedAt = process.hrtime.bigint();
     const payload = await tidalGetUrl(accessToken, absoluteNext);
     const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
     const data = Array.isArray(payload?.data) ? payload.data : [];
     for (const item of data) {
-      if (item?.type === 'tracks' && /^\d+$/.test(String(item.id || ''))) {
-        ids.push(String(item.id));
-      }
+      if (item?.type === 'tracks' && /^\d+$/.test(String(item.id || ''))) ids.push(String(item.id));
     }
-    pages.push({
-      page: pages.length + 1,
-      count: data.length,
-      elapsedMs: Math.round(elapsedMs * 10) / 10
-    });
+    pages.push({ page: pages.length + 1, count: data.length, elapsedMs: Math.round(elapsedMs * 10) / 10 });
     next = payload?.links?.next || null;
     if (next) await sleep(1000);
   }
-
   return { ids, pages };
 }
 
@@ -123,14 +100,12 @@ function heosBrowse(command, timeoutMs = 15000) {
     const socket = net.createConnection({ host: AVR_HOST, port: HEOS_PORT });
     let buffer = '';
     let finished = false;
-
     const finish = (error, value) => {
       if (finished) return;
       finished = true;
       socket.destroy();
       error ? reject(error) : resolve(value);
     };
-
     socket.setTimeout(timeoutMs);
     socket.on('connect', () => socket.write(command + '\r\n'));
     socket.on('data', data => {
@@ -143,29 +118,16 @@ function heosBrowse(command, timeoutMs = 15000) {
         try {
           const response = JSON.parse(line);
           if (!response.heos) continue;
-          if (response.heos.result === 'fail') {
-            finish(new Error(response.heos.message || 'HEOS browse failed'));
-            return;
-          }
-          if (Array.isArray(response.payload)) {
-            finish(null, response);
-            return;
-          }
+          if (response.heos.result === 'fail') return finish(new Error(response.heos.message || 'HEOS browse failed'));
+          if (Array.isArray(response.payload)) return finish(null, response);
           const message = String(response.heos.message || '');
-          if (!message.includes('command under process')) {
-            finish(null, response);
-            return;
-          }
-        } catch {
-          // Ignore unrelated/non-JSON HEOS traffic.
-        }
+          if (!message.includes('command under process')) return finish(null, response);
+        } catch {}
       }
     });
     socket.on('timeout', () => finish(new Error(`HEOS browse timeout: ${command}`)));
     socket.on('error', finish);
-    socket.on('close', () => {
-      if (!finished) finish(new Error('HEOS connection closed'));
-    });
+    socket.on('close', () => { if (!finished) finish(new Error('HEOS connection closed')); });
   });
 }
 
@@ -174,13 +136,8 @@ async function getAllHeosFavouriteTracks() {
   const items = [];
   let start = 0;
   let total = null;
-
   while (total === null || start < total) {
-    const response = await heosBrowse(
-      'heos://browse/browse?sid=' + HEOS_SID +
-      '&cid=' + HEOS_CID +
-      '&range=' + start + ',' + (start + pageSize - 1)
-    );
+    const response = await heosBrowse('heos://browse/browse?sid=' + HEOS_SID + '&cid=' + HEOS_CID + '&range=' + start + ',' + (start + pageSize - 1));
     const payload = Array.isArray(response.payload) ? response.payload : [];
     items.push(...payload);
     const message = String(response.heos?.message || '');
@@ -190,7 +147,6 @@ async function getAllHeosFavouriteTracks() {
     start += payload.length;
     if (total === null && payload.length < pageSize) break;
   }
-
   return items.map((item, index) => ({
     position: index,
     mid: String(item.mid || ''),
@@ -202,113 +158,90 @@ async function getAllHeosFavouriteTracks() {
   }));
 }
 
-function findDuplicates(ids) {
+function countIds(ids) {
   const counts = new Map();
   for (const id of ids) counts.set(id, (counts.get(id) || 0) + 1);
-  return [...counts.entries()]
-    .filter(([, count]) => count > 1)
-    .map(([id, count]) => ({ id, count }));
+  return counts;
 }
 
-async function getOfficialTrackDetail(accessToken, id) {
-  const url = '/tracks/' + encodeURIComponent(id) +
-    '?include=' + encodeURIComponent('artists,albums,albums.coverArt') +
-    '&countryCode=' + encodeURIComponent(COUNTRY_CODE);
-  const payload = await tidalGetUrl(accessToken, url);
-  const root = payload?.data && !Array.isArray(payload.data) ? payload.data : null;
-  const included = Array.isArray(payload?.included) ? payload.included : [];
-  const artist = included.find(item => item?.type === 'artists');
-  const album = included.find(item => item?.type === 'albums');
-  return {
-    id: String(root?.id || id),
-    title: String(root?.attributes?.title || ''),
-    artist: String(artist?.attributes?.name || ''),
-    album: String(album?.attributes?.title || ''),
-    albumId: String(album?.id || ''),
-    isrc: String(root?.attributes?.isrc || ''),
-    duration: String(root?.attributes?.duration || '')
-  };
+function duplicateSummary(ids) {
+  return [...countIds(ids).entries()].filter(([, count]) => count > 1).map(([id, count]) => ({ id, count }));
+}
+
+function uniqueInOrder(ids) {
+  const seen = new Set();
+  return ids.filter(id => {
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
 }
 
 async function main() {
-  console.log('READ-ONLY Favourite Tracks full correlation probe');
-  console.log(`Mismatch metadata detail limit: ${DETAIL_LIMIT}`);
-
+  console.log('READ-ONLY Favourite Tracks positional correlation probe');
+  console.log(`Positional detail limit: ${DETAIL_LIMIT}`);
   const accessToken = await getAccessToken();
-  const [official, heosTracks] = await Promise.all([
-    getAllOfficialFavouriteTrackIds(accessToken),
-    getAllHeosFavouriteTracks()
-  ]);
-
+  const [official, heosTracks] = await Promise.all([getAllOfficialFavouriteTrackIds(accessToken), getAllHeosFavouriteTracks()]);
   const officialIds = official.ids;
   const heosIds = heosTracks.map(item => item.mid);
   const officialSet = new Set(officialIds);
   const heosSet = new Set(heosIds);
-  const officialOnly = officialIds.filter(id => !heosSet.has(id));
-  const heosOnly = heosTracks.filter(item => !officialSet.has(item.mid));
-  const shared = officialIds.filter(id => heosSet.has(id));
-  const heosPositions = new Map();
-  heosIds.forEach((id, index) => {
-    if (!heosPositions.has(id)) heosPositions.set(id, index);
+  const officialOnlyPositions = officialIds.map((id, position) => ({ id, position })).filter(item => !heosSet.has(item.id));
+  const heosCounts = countIds(heosIds);
+  const heosSeen = new Map();
+  const duplicateOccurrences = [];
+  heosTracks.forEach(item => {
+    const occurrence = (heosSeen.get(item.mid) || 0) + 1;
+    heosSeen.set(item.mid, occurrence);
+    if (occurrence > 1) duplicateOccurrences.push({ ...item, occurrence, totalOccurrences: heosCounts.get(item.mid) });
   });
-
-  const positionDifferences = shared.map((id, officialPosition) => ({
-    id,
-    officialPosition,
-    heosPosition: heosPositions.get(id),
-    delta: heosPositions.get(id) - officialPosition
-  }));
-  const exactSamePositionCount = positionDifferences.filter(item => item.delta === 0).length;
-  const sameOrder = officialIds.length === heosIds.length &&
-    officialIds.every((id, index) => id === heosIds[index]);
-
+  const officialLive = officialIds.filter(id => heosSet.has(id));
+  const heosUnique = uniqueInOrder(heosIds);
+  const dedupedSameOrder = officialLive.length === heosUnique.length && officialLive.every((id, index) => id === heosUnique[index]);
+  const rowMatches = officialIds.reduce((count, id, index) => count + (id === heosIds[index] ? 1 : 0), 0);
+  const staleRows = officialOnlyPositions.map(({ id, position }) => {
+    const at = heosTracks[position] || null;
+    const before = position > 0 ? heosTracks[position - 1] : null;
+    const after = position + 1 < heosTracks.length ? heosTracks[position + 1] : null;
+    return {
+      position,
+      officialStaleId: id,
+      heosAtSamePosition: at ? { mid: at.mid, title: at.title, artist: at.artist, album: at.album, albumId: at.albumId, duplicateTotal: heosCounts.get(at.mid) } : null,
+      heosBefore: before ? { position: before.position, mid: before.mid, title: before.title, artist: before.artist } : null,
+      heosAfter: after ? { position: after.position, mid: after.mid, title: after.title, artist: after.artist } : null
+    };
+  });
   const summary = {
     officialTrackCount: officialIds.length,
-    officialPages: official.pages.length,
-    officialPageSizes: official.pages.map(page => page.count),
+    officialUniqueCount: new Set(officialIds).size,
     heosTrackCount: heosIds.length,
-    exactIdOverlap: shared.length,
-    officialOnlyCount: officialOnly.length,
-    heosOnlyCount: heosOnly.length,
-    officialDuplicateIds: findDuplicates(officialIds),
-    heosDuplicateIds: findDuplicates(heosIds),
-    sameOrder,
-    exactSamePositionCount,
-    sharedTrackCount: shared.length,
-    maxAbsolutePositionDelta: positionDifferences.length
-      ? Math.max(...positionDifferences.map(item => Math.abs(item.delta)))
-      : 0
+    heosUniqueMidCount: heosSet.size,
+    exactIdOverlapUnique: [...officialSet].filter(id => heosSet.has(id)).length,
+    officialOnlyCount: officialOnlyPositions.length,
+    heosUniqueOnlyCount: [...heosSet].filter(id => !officialSet.has(id)).length,
+    heosDuplicateIdCount: duplicateSummary(heosIds).length,
+    heosDuplicateExcessOccurrences: heosIds.length - heosSet.size,
+    samePositionRowMatches: rowMatches,
+    officialLiveCount: officialLive.length,
+    heosDedupedCount: heosUnique.length,
+    dedupedSameOrder
   };
-
   console.log('\nSUMMARY');
   console.log(JSON.stringify(summary, null, 2));
-
-  console.log('\nTIDAL PAGE TIMINGS');
-  console.log(JSON.stringify(official.pages, null, 2));
-
-  console.log('\nOFFICIAL-ONLY IDS');
-  console.log(JSON.stringify(officialOnly.slice(0, 50), null, 2));
-
-  console.log('\nHEOS-ONLY ITEMS');
-  console.log(JSON.stringify(heosOnly.slice(0, 50), null, 2));
-
-  if (!sameOrder) {
-    console.log('\nFIRST POSITION DIFFERENCES');
-    console.log(JSON.stringify(positionDifferences.filter(item => item.delta !== 0).slice(0, 50), null, 2));
-  }
-
-  if (DETAIL_LIMIT > 0 && officialOnly.length) {
-    const details = [];
-    for (const id of officialOnly.slice(0, DETAIL_LIMIT)) {
-      if (details.length) await sleep(1000);
-      try {
-        details.push({ ok: true, ...(await getOfficialTrackDetail(accessToken, id)) });
-      } catch (error) {
-        details.push({ ok: false, id, error: error.message });
-      }
+  console.log('\nHEOS DUPLICATE IDS');
+  console.log(JSON.stringify(duplicateSummary(heosIds), null, 2));
+  console.log('\nOFFICIAL STALE POSITIONS WITH HEOS NEIGHBOURS');
+  console.log(JSON.stringify(staleRows.slice(0, DETAIL_LIMIT), null, 2));
+  console.log('\nHEOS EXTRA DUPLICATE OCCURRENCES');
+  console.log(JSON.stringify(duplicateOccurrences.slice(0, DETAIL_LIMIT), null, 2));
+  if (!dedupedSameOrder) {
+    const firstDifferences = [];
+    const limit = Math.max(officialLive.length, heosUnique.length);
+    for (let i = 0; i < limit && firstDifferences.length < DETAIL_LIMIT; i += 1) {
+      if (officialLive[i] !== heosUnique[i]) firstDifferences.push({ position: i, officialLiveId: officialLive[i] || null, heosUniqueMid: heosUnique[i] || null });
     }
-    console.log('\nOFFICIAL-ONLY METADATA');
-    console.log(JSON.stringify(details, null, 2));
+    console.log('\nDEDUPED ORDER DIFFERENCES');
+    console.log(JSON.stringify(firstDifferences, null, 2));
   }
 }
 
