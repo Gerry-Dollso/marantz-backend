@@ -61,8 +61,16 @@ async function getAccessToken() {
   return String(payload.access_token);
 }
 
+function absoluteTidalUrl(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (/^https?:\/\//i.test(text)) return text;
+  if (text.startsWith('/')) return API_BASE + text;
+  return API_BASE + '/' + text;
+}
+
 async function tidalGetUrl(accessToken, url) {
-  const response = await fetch(url, {
+  const response = await fetch(absoluteTidalUrl(url), {
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: 'application/vnd.api+json'
@@ -77,19 +85,20 @@ async function tidalGetUrl(accessToken, url) {
 }
 
 async function getAllOfficialFavouriteTrackIds(accessToken) {
-  let next = API_BASE + '/userCollectionTracks/me/relationships/items?countryCode=' +
+  let next = '/userCollectionTracks/me/relationships/items?countryCode=' +
     encodeURIComponent(COUNTRY_CODE);
   const ids = [];
   const pages = [];
   const seenUrls = new Set();
 
   while (next) {
-    if (seenUrls.has(next)) throw new Error('Repeated TIDAL pagination URL');
+    const absoluteNext = absoluteTidalUrl(next);
+    if (seenUrls.has(absoluteNext)) throw new Error('Repeated TIDAL pagination URL');
     if (pages.length >= 250) throw new Error('TIDAL pagination safety limit reached');
-    seenUrls.add(next);
+    seenUrls.add(absoluteNext);
 
     const startedAt = process.hrtime.bigint();
-    const payload = await tidalGetUrl(accessToken, next);
+    const payload = await tidalGetUrl(accessToken, absoluteNext);
     const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
     const data = Array.isArray(payload?.data) ? payload.data : [];
     for (const item of data) {
@@ -202,7 +211,7 @@ function findDuplicates(ids) {
 }
 
 async function getOfficialTrackDetail(accessToken, id) {
-  const url = API_BASE + '/tracks/' + encodeURIComponent(id) +
+  const url = '/tracks/' + encodeURIComponent(id) +
     '?include=' + encodeURIComponent('artists,albums,albums.coverArt') +
     '&countryCode=' + encodeURIComponent(COUNTRY_CODE);
   const payload = await tidalGetUrl(accessToken, url);
