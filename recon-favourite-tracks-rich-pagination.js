@@ -6,7 +6,8 @@ const API_BASE = 'https://openapi.tidal.com/v2';
 const TOKEN_URL = 'https://auth.tidal.com/v1/oauth2/token';
 const ENV_FILE = '/etc/marantz-backend/tidal.env';
 const REFRESH_TOKEN_FILE = '/etc/marantz-backend/tidal-refresh-token';
-const INCLUDE = 'items,items.artists,items.albums,items.albums.coverArt';
+const ROOT_INCLUDE = 'items,items.artists,items.albums,items.albums.coverArt';
+const REL_INCLUDE = 'artists,albums,albums.coverArt';
 
 function parseEnvFile(pathname) {
   const values = {};
@@ -40,8 +41,7 @@ async function get(accessToken, path) {
   const started = Date.now();
   const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/vnd.api+json' } });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(`TIDAL ${response.status}: ${JSON.stringify(payload.errors || payload)}`);
-  return { payload, ms: Date.now() - started };
+  return { status: response.status, payload, ms: Date.now() - started };
 }
 
 function summarizeIncluded(included) {
@@ -55,52 +55,61 @@ function summarizeIncluded(included) {
   };
 }
 
-function summarizePage(label, result) {
-  const root = result.payload?.data && !Array.isArray(result.payload.data) ? result.payload.data : null;
-  const items = root?.relationships?.items || null;
+function addQuery(path, key, value) {
+  const parsed = new URL(path, API_BASE);
+  parsed.searchParams.set(key, value);
+  return parsed.pathname + '?' + parsed.searchParams.toString();
+}
+
+function summarizeRelationshipPage(label, result) {
+  const data = Array.isArray(result.payload?.data) ? result.payload.data : [];
   return {
     label,
+    status: result.status,
     ms: result.ms,
-    relationshipDataCount: Array.isArray(items?.data) ? items.data.length : items?.data ? 1 : 0,
-    self: items?.links?.self || null,
-    next: items?.links?.next || null,
-    included: summarizeIncluded(result.payload?.included)
+    dataCount: data.length,
+    firstIds: data.slice(0, 5).map(item => String(item?.id || '')),
+    next: result.payload?.links?.next || null,
+    included: summarizeIncluded(result.payload?.included),
+    errors: result.payload?.errors || null
   };
 }
 
-function collectionPathFromNext(next) {
-  if (!next) return null;
-  const parsed = new URL(next, API_BASE);
-  const cursor = parsed.searchParams.get('page[cursor]');
-  if (!cursor) return null;
-  return '/userCollectionTracks/me?include=' + encodeURIComponent(INCLUDE) + '&countryCode=GB&page%5Bcursor%5D=' + encodeURIComponent(cursor);
-}
-
 async function main() {
-  console.log('READ-ONLY Favourite Tracks rich pagination probe');
+  console.log('READ-ONLY Favourite Tracks relationship cursor metadata probe');
   const accessToken = await token();
-  const firstPath = '/userCollectionTracks/me?include=' + encodeURIComponent(INCLUDE) + '&countryCode=GB';
-  const first = await get(accessToken, firstPath);
-  const firstSummary = summarizePage('PAGE 1', first);
-  console.log(JSON.stringify(firstSummary, null, 2));
 
-  const secondPath = collectionPathFromNext(firstSummary.next);
-  if (!secondPath) {
-    console.log('NO USABLE NEXT CURSOR AFTER PAGE 1; stopping read-only probe.');
+  const rootPath = '/userCollectionTracks/me?include=' + encodeURIComponent(ROOT_INCLUDE) + '&countryCode=GB';
+  const rootResult = await get(accessToken, rootPath);
+  if (rootResult.status !== 200) throw new Error(`Root request failed with ${rootResult.status}`);
+  const root = rootResult.payload?.data && !Array.isArray(rootResult.payload.data) ? rootResult.payload.data : null;
+  const items = root?.relationships?.items || null;
+  const firstNext = items?.links?.next || null;
+  console.log(JSON.stringify({
+    label: 'ROOT PAGE 1',
+    status: rootResult.status,
+    ms: rootResult.ms,
+    relationshipDataCount: Array.isArray(items?.data) ? items.data.length : 0,
+    firstIds: Array.isArray(items?.data) ? items.data.slice(0, 5).map(item => String(item?.id || '')) : [],
+    next: firstNext,
+    included: summarizeIncluded(rootResult.payload?.included)
+  }, null, 2));
+
+  if (!firstNext) {
+    console.log('NO NEXT RELATIONSHIP CURSOR; stopping read-only probe.');
     return;
   }
-  const second = await get(accessToken, secondPath);
-  const secondSummary = summarizePage('PAGE 2', second);
-  console.log(JSON.stringify(secondSummary, null, 2));
 
-  const thirdPath = collectionPathFromNext(secondSummary.next);
-  if (!thirdPath) {
-    console.log('NO USABLE NEXT CURSOR AFTER PAGE 2; stopping read-only probe.');
-    return;
-  }
-  const third = await get(accessToken, thirdPath);
-  const thirdSummary = summarizePage('PAGE 3', third);
-  console.log(JSON.stringify(thirdSummary, null, 2));
+  const page2Path = addQuery(firstNext, 'include', REL_INCLUDE);
+  const page2 = await get(accessToken, page2Path);
+  const page2Summary = summarizeRelationshipPage('RELATIONSHIP PAGE 2 + include', page2);
+  console.log(JSON.stringify(page2Summary, null, 2));
+
+  if (page2.status !== 200 || !page2Summary.next) return;
+
+  const page3Path = addQuery(page2Summary.next, 'include', REL_INCLUDE);
+  const page3 = await get(accessToken, page3Path);
+  console.log(JSON.stringify(summarizeRelationshipPage('RELATIONSHIP PAGE 3 + include', page3), null, 2));
 }
 
 main().catch(error => {
