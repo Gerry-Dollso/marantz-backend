@@ -183,8 +183,24 @@ async function getOfficialTrackDetail(accessToken, id) {
   );
   const root = payload?.data && !Array.isArray(payload.data) ? payload.data : null;
   const included = Array.isArray(payload?.included) ? payload.included : [];
-  const artist = included.find(item => item?.type === 'artists');
-  const album = included.find(item => item?.type === 'albums');
+  const artistLinks = Array.isArray(root?.relationships?.artists?.data)
+    ? root.relationships.artists.data
+    : root?.relationships?.artists?.data
+      ? [root.relationships.artists.data]
+      : [];
+  const primaryArtistLink = artistLinks[0] || null;
+  const artist = primaryArtistLink
+    ? included.find(item => item?.type === 'artists' && String(item?.id || '') === String(primaryArtistLink.id || ''))
+    : null;
+  const albumLinks = Array.isArray(root?.relationships?.albums?.data)
+    ? root.relationships.albums.data
+    : root?.relationships?.albums?.data
+      ? [root.relationships.albums.data]
+      : [];
+  const primaryAlbumLink = albumLinks[0] || null;
+  const album = primaryAlbumLink
+    ? included.find(item => item?.type === 'albums' && String(item?.id || '') === String(primaryAlbumLink.id || ''))
+    : null;
   return {
     id: String(root?.id || id),
     title: String(root?.attributes?.title || ''),
