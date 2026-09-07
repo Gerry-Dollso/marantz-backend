@@ -44,69 +44,63 @@ async function get(accessToken, path) {
   return { payload, ms: Date.now() - started };
 }
 
-function linkSummary(value) {
-  if (!value || typeof value !== 'object') return value || null;
-  return Object.fromEntries(Object.entries(value).filter(([key]) => ['self', 'related', 'next', 'prev', 'first', 'last'].includes(key)));
-}
-
 function summarizeIncluded(included) {
   const list = Array.isArray(included) ? included : [];
   const types = {};
   for (const item of list) types[item?.type || 'unknown'] = (types[item?.type || 'unknown'] || 0) + 1;
-  return { count: list.length, types, trackIds: list.filter(item => item?.type === 'tracks').map(item => String(item.id || '')) };
+  return {
+    count: list.length,
+    types,
+    trackIds: list.filter(item => item?.type === 'tracks').map(item => String(item.id || ''))
+  };
+}
+
+function summarizePage(label, result) {
+  const root = result.payload?.data && !Array.isArray(result.payload.data) ? result.payload.data : null;
+  const items = root?.relationships?.items || null;
+  return {
+    label,
+    ms: result.ms,
+    relationshipDataCount: Array.isArray(items?.data) ? items.data.length : items?.data ? 1 : 0,
+    self: items?.links?.self || null,
+    next: items?.links?.next || null,
+    included: summarizeIncluded(result.payload?.included)
+  };
+}
+
+function collectionPathFromNext(next) {
+  if (!next) return null;
+  const parsed = new URL(next, API_BASE);
+  const cursor = parsed.searchParams.get('page[cursor]');
+  if (!cursor) return null;
+  return '/userCollectionTracks/me?include=' + encodeURIComponent(INCLUDE) + '&countryCode=GB&page%5Bcursor%5D=' + encodeURIComponent(cursor);
 }
 
 async function main() {
   console.log('READ-ONLY Favourite Tracks rich pagination probe');
   const accessToken = await token();
-  const rootPath = '/userCollectionTracks/me?include=' + encodeURIComponent(INCLUDE) + '&countryCode=GB';
-  const first = await get(accessToken, rootPath);
-  const root = first.payload?.data && !Array.isArray(first.payload.data) ? first.payload.data : null;
-  const items = root?.relationships?.items || null;
-  console.log('ROOT');
-  console.log(JSON.stringify({
-    ms: first.ms,
-    rootRelationshipKeys: Object.keys(root?.relationships || {}),
-    itemsRelationship: items ? {
-      dataCount: Array.isArray(items.data) ? items.data.length : items.data ? 1 : 0,
-      links: linkSummary(items.links),
-      meta: items.meta || null
-    } : null,
-    included: summarizeIncluded(first.payload?.included)
-  }, null, 2));
+  const firstPath = '/userCollectionTracks/me?include=' + encodeURIComponent(INCLUDE) + '&countryCode=GB';
+  const first = await get(accessToken, firstPath);
+  const firstSummary = summarizePage('PAGE 1', first);
+  console.log(JSON.stringify(firstSummary, null, 2));
 
-  const related = items?.links?.related || '';
-  if (!related) {
-    console.log('NO RELATED ITEMS LINK; stopping read-only probe.');
+  const secondPath = collectionPathFromNext(firstSummary.next);
+  if (!secondPath) {
+    console.log('NO USABLE NEXT CURSOR AFTER PAGE 1; stopping read-only probe.');
     return;
   }
+  const second = await get(accessToken, secondPath);
+  const secondSummary = summarizePage('PAGE 2', second);
+  console.log(JSON.stringify(secondSummary, null, 2));
 
-  const separator = related.includes('?') ? '&' : '?';
-  const richRelated = related + separator + 'include=' + encodeURIComponent('artists,albums,albums.coverArt') + '&countryCode=GB';
-  const page1 = await get(accessToken, richRelated);
-  console.log('RELATED PAGE 1');
-  console.log(JSON.stringify({
-    ms: page1.ms,
-    dataCount: Array.isArray(page1.payload?.data) ? page1.payload.data.length : 0,
-    links: linkSummary(page1.payload?.links),
-    included: summarizeIncluded(page1.payload?.included)
-  }, null, 2));
-
-  const next = page1.payload?.links?.next || '';
-  if (!next) {
-    console.log('NO NEXT LINK ON RELATED PAGE; stopping read-only probe.');
+  const thirdPath = collectionPathFromNext(secondSummary.next);
+  if (!thirdPath) {
+    console.log('NO USABLE NEXT CURSOR AFTER PAGE 2; stopping read-only probe.');
     return;
   }
-  const nextSeparator = next.includes('?') ? '&' : '?';
-  const richNext = next + nextSeparator + 'include=' + encodeURIComponent('artists,albums,albums.coverArt');
-  const page2 = await get(accessToken, richNext);
-  console.log('RELATED PAGE 2');
-  console.log(JSON.stringify({
-    ms: page2.ms,
-    dataCount: Array.isArray(page2.payload?.data) ? page2.payload.data.length : 0,
-    links: linkSummary(page2.payload?.links),
-    included: summarizeIncluded(page2.payload?.included)
-  }, null, 2));
+  const third = await get(accessToken, thirdPath);
+  const thirdSummary = summarizePage('PAGE 3', third);
+  console.log(JSON.stringify(thirdSummary, null, 2));
 }
 
 main().catch(error => {
