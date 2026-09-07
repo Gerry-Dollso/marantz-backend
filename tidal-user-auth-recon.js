@@ -115,7 +115,8 @@ function createTidalUserAuthRecon(options = {}) {
   const FAVOURITE_TRACKS_TTL_MS = 5 * 60 * 1000;
   const FAVOURITE_TRACKS_MAX_PAGES = 250;
   const FAVOURITE_TRACKS_BATCH_SIZE = 20;
-  const FAVOURITE_TRACKS_METADATA_CONCURRENCY = 4;
+  const FAVOURITE_TRACKS_METADATA_CONCURRENCY = 2;
+  const FAVOURITE_TRACKS_RELATIONSHIP_PAGE_DELAY_MS = 500;
   const PERSONALISED_PLAYLIST_TTL_MS = 5 * 60 * 1000;
   const PERSONALISED_ARTWORK_TTL_MS = 30 * 60 * 1000;
   const PERSONALISED_PLAYLIST_MAX_PAGES = 10;
@@ -692,6 +693,9 @@ function createTidalUserAuthRecon(options = {}) {
 
       next = payload?.links?.next || null;
       pages += 1;
+      if (next) {
+        await new Promise(resolve => setTimeout(resolve, FAVOURITE_TRACKS_RELATIONSHIP_PAGE_DELAY_MS));
+      }
     }
 
     return { ids, pages };
