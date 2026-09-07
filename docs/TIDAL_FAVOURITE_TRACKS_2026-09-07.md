@@ -27,7 +27,7 @@ The user's TIDAL Favourite Tracks screen visibly contains **594 tracks**. The fi
 The relationship endpoint returned **635 unique saved track references** across 32 pages:
 
 - 594 IDs are current/live track resources.
-- 41 IDs are stale/historical references for which current `/tracks/<id>` lookup returned HTTP 404 in the reconnaissance sample/probe.
+- 41 IDs are stale/historical references for which current track-resource lookup fails/omits the resource.
 - the official relationship itself contained no duplicate IDs in this 635-reference snapshot.
 
 ### HEOS `My Music-Tracks`
@@ -43,7 +43,7 @@ HEOS returned and the official HEOS app visibly displayed **635 rows**, but only
 
 The decisive read-only comparison was:
 
-1. remove the 41 stale/404 references from the 635 official TIDAL relationship;
+1. remove the 41 stale/unresolvable references from the 635 official TIDAL relationship;
 2. deduplicate the 635 HEOS rows by MID, retaining first-occurrence order.
 
 Both sides then contain **594 IDs and the two 594-ID sequences are exactly identical in order** (`dedupedSameOrder: true`).
@@ -72,7 +72,7 @@ The repeated HEOS entries are playable. The TIDAL consumer Favourite Tracks UI d
 
 - TIDAL consumer UI: 594 visible Favourite Tracks.
 - Official collection relationship: 635 unique references in the captured snapshot.
-- 594 official IDs are live/current; 41 captured relationship IDs are stale/404 under current track lookup.
+- 594 official IDs are live/current; 41 captured relationship IDs are stale/unresolvable as current track resources.
 - HEOS: 635 rows, 594 unique MIDs, 41 excess duplicate occurrences.
 - every unique HEOS MID belongs to the 594 live official-ID set.
 - after stale-reference removal / HEOS deduplication, the same 594 IDs remain in exactly the same order.
@@ -97,24 +97,114 @@ A shared-anchor gap probe tested whether each stale official reference could be 
 
 The repeated HEOS rows often occur in blocks at different positions from the stale official references. Do not infer stale-ID replacement mappings from raw row position.
 
-## Production design consequence for Favourite Tracks
+## Final 594-track metadata validation
+
+The final row-for-row read-only validation compared the 594 current official TIDAL tracks with the 594 HEOS rows after first-occurrence MID deduplication.
+
+Authoritative result:
+
+- official raw references: 635
+- official live/current tracks: 594
+- HEOS raw rows: 635
+- HEOS unique MIDs: 594
+- same ID order: **true**
+- exact primary artist: **594/594**
+- exact album: **594/594**
+- exact album ID: **594/594**
+- normalized title + artist identity: **593/594**
+- full identity matches: **593/594**
+- mismatch count: **1**
+
+The only genuine display discrepancy was track ID `77638341`, Sonic Youth, album `Dirty`: official TIDAL title `100%`, while HEOS exposed `100%25`. This is HEOS/transport-style encoding leakage, reinforcing that official TIDAL metadata should be the display authority.
+
+### Primary artist rule discovered during validation
+
+Do not use the first artist resource appearing in JSON:API `included[]` as the primary artist. `included[]` ordering is not semantic.
+
+The correct primary artist is the **first artist linkage in `track.relationships.artists.data`**, resolved by ID against `included[]`.
+
+This was verified with tracks including:
+
+- Massive Attack — `I Against I` (Mos Def also included)
+- Massive Attack — `Teardrop` (Elizabeth Fraser also included)
+- Gorillaz — `Feel Good Inc.` (De La Soul also included)
+
+The existing production-oriented `compactTrack()` already follows relationship linkage ordering and is the model to preserve.
+
+## Official TIDAL API shape and performance reconnaissance
+
+The final read-only API-shape probes established the efficient production mechanism rather than performing hundreds of individual track lookups.
+
+### Collection relationship pagination
+
+`/userCollectionTracks/me/relationships/items` is effectively capped at **20 saved references per page**. Supplying `page[limit]=50` or `100` did not increase the returned count.
+
+For the captured 635-reference collection this means 32 relationship pages.
+
+The relationship endpoint is useful for **membership and canonical saved order**, but it cannot directly include rich artist/album metadata. An attempted rich include on a relationship cursor returned HTTP 400 with:
+
+`Invalid include path 'artists': 'artists' is unavailable. Available: [items]`
+
+The root `/userCollectionTracks/me?include=...` can richly expand its first 20 items, but synthesizing `page[cursor]` on that root request did not advance it; repeated requests returned the first page again. Therefore do not build production pagination around root collection cursor synthesis.
+
+### Bulk track metadata lookup
+
+`/tracks` supports deterministic bulk lookup using `filter[id]` together with rich includes for artists, albums and album cover art.
+
+Both comma-separated and repeated `filter[id]` forms worked in reconnaissance. Prefer one simple, consistent production form.
+
+The hard maximum is **20 IDs per bulk request**. A request for 50 or 100 IDs returned HTTP 400 `INVALID_ARRAY_LENGTH` with `Filter accepts at most 20 values`.
+
+A representative 20-track rich lookup returned all 20 resources in about **173 ms** in the captured run. Five-track probes returned in roughly 146–233 ms. These are observations, not latency guarantees.
+
+### Stale-reference behaviour
+
+This is an important production result. A bulk request containing four live IDs plus known stale reference `241512492` returned:
+
+- HTTP 200
+- four live track resources
+- the stale ID omitted
+- rich included metadata for the live resources
+- no request-level error.
+
+Therefore stale saved references can be filtered naturally by bulk track resolution: production does not need to make one failing `/tracks/<id>` request per saved reference.
+
+### Bulk response ordering
+
+Bulk `/tracks?filter[id]=...` responses did **not** preserve requested collection order in the probes.
+
+Production must never trust bulk response order. Build an ID→resource map and reconstruct the live collection according to the original relationship-ID sequence.
+
+## Canonical production design for Favourite Tracks
 
 Do **not** reproduce the raw 635-row HEOS Favourite Tracks browse result on MarantzPi.
 
 The intended display target is the same **594 current tracks visible in TIDAL**, using official TIDAL metadata. HEOS remains the playback transport and direct library context.
 
-Candidate flow:
+Canonical loader design:
 
 ```text
-Official TIDAL Favourite Tracks relationship
+Official /userCollectionTracks/me/relationships/items
         ↓
-resolve/filter to current live track resources
+collect canonical saved-reference order (20/page)
         ↓
-594 current official track IDs + rich metadata
+635 saved IDs in captured snapshot
         ↓
-validate against directly exposed HEOS My Music-Tracks identity/context
+split IDs into batches of at most 20
         ↓
-MarantzPi displays the 594-track TIDAL-equivalent collection
+bulk /tracks?filter[id]=... with artists/albums/cover art
+        ↓
+stale/unresolvable IDs are omitted by TIDAL
+        ↓
+index returned resources by track ID
+        ↓
+reconstruct in original relationship order
+        ↓
+594 current rich tracks in captured snapshot
+        ↓
+validate against unique HEOS My Music-Tracks identity/order
+        ↓
+MarantzPi displays official metadata
         ↓
 HEOS performs playback
 ```
@@ -123,24 +213,47 @@ Because the 594 current official IDs already correspond to the 594 unique HEOS M
 
 The old HEOS browse/cache path should remain available as playback context, fallback/correlation evidence and diagnostics even after the display/catalogue path moves to official TIDAL.
 
+## Cache / UX design direction
+
+A naive cold rebuild would require approximately 32 sequential relationship reads plus 32 bulk metadata reads for the captured collection. Do not make the Pi perform or wait for that entire sequence every time Favourite Tracks opens.
+
+Preferred direction, to be implemented and runtime-tested rather than assumed:
+
+- backend owns the canonical Favourite Tracks collection;
+- cache the last validated canonical collection;
+- opening Favourite Tracks should normally be served from backend cache;
+- refresh official data without blocking every UI open;
+- use controlled concurrency where safe for independent 20-ID metadata batches;
+- relationship pagination remains ordered/cursor-driven;
+- validate refreshed identity against HEOS before allowing fresh collection state to drive deterministic playback;
+- retain last-known-good validated state if a refresh is incomplete or fails, with diagnostics rather than fuzzy substitution.
+
+The user's preference is a **continuous full Favourite Tracks list without restoring the old pager**, if the cached official-TIDAL implementation proves responsive enough. Do not promise this solely from reconnaissance timings; confirm with production/runtime testing.
+
 ## Playback implications
 
-The existing HEOS `My Music-Tracks` playback machinery currently operates on the raw HEOS collection. Migration must review PLAY ALL / SHUFFLE ALL / PLAY FROM HERE semantics so the new UI does not silently reintroduce HEOS's repeated rows.
+The existing HEOS `My Music-Tracks` playback machinery currently operates on the raw 635-row HEOS collection. Migration must change the logical collection supplied to PLAY ALL / SHUFFLE ALL / PLAY FROM HERE so the new UI does not silently reintroduce HEOS's repeated blocks.
 
-For the new 594-track display, duplicate-row occurrence identity should not be needed if each displayed current track is represented once. Individual playback can use the validated official ID / HEOS MID relationship and known `My Music-Tracks` context.
+For the canonical collection:
+
+- PLAY NOW / PLAY NEXT / ADD TO END / PLAY ONLY can use validated official track ID = HEOS MID with known `My Music-Tracks` context;
+- PLAY FROM HERE must take the selected index from the canonical live collection and queue its canonical tail;
+- PLAY ALL / SHUFFLE ALL must use the canonical live collection, not raw HEOS rows;
+- preserve the existing HEOS queue generation/cancellation and per-track failure-isolation machinery rather than replacing it unnecessarily.
 
 Preserve the critical HEOS CID rule: use literal-space `My Music-Tracks`, not `My%20Music-Tracks`, when constructing HEOS browse/add-to-queue commands.
 
-## Next read-only validation before production implementation
+## Current checkpoint / next implementation step
 
-Before changing production routes/UI, perform one final read-only comparison of the 594 live official records against the 594 deduplicated HEOS records, including at least:
+Favourite Tracks reconnaissance is considered **complete enough to begin production implementation**. Further probes should only be added to answer a concrete implementation uncertainty.
 
-- track ID / HEOS MID
-- title
-- artist
-- album where available
-- ordering
+Next planned step:
 
-The goal is to verify row-for-row identity with rich metadata, not merely ID-set equality. If that passes, design the production official-TIDAL Favourite Tracks endpoint and its caching/pagination strategy.
+1. add a production backend canonical official-TIDAL Favourite Tracks collection function and cache;
+2. do **not** change Pi UI or playback routes in that first stage;
+3. validate the production function against the proven 594-track baseline and HEOS identity/order;
+4. only then wire display and canonical playback semantics.
 
-Do not modify/delete the user's TIDAL favourites as part of this investigation; the 594-track consumer collection appears correct and the malformed 635-row representation is visible independently in HEOS.
+Temporary `recon-*` helpers are evidence/reconnaissance tools, not the intended production architecture. They may be removed in a later housekeeping commit after their findings are safely preserved here.
+
+Do not modify/delete the user's TIDAL favourites as part of this work; the 594-track consumer collection appears correct and the malformed 635-row representation is visible independently in HEOS.
