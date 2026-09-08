@@ -55,6 +55,10 @@ let pendingTidalVoiceSearch = null;
 let tidalVoiceSearchSequence = 0;
 let tidalQueueGeneration = 0;
 let tidalFavouriteQueueCommand = null;
+let favouriteTracksValidationCache = null;
+let favouriteTracksValidationRefresh = null;
+const FAVOURITE_TRACKS_VALIDATION_TTL_MS = 5 * 60 * 1000;
+const FAVOURITE_TRACKS_VALIDATION_MAX_AGE_MS = 30 * 60 * 1000;
 const voiceAliases = createVoiceAliasStore();
 
 function supersedeTidalQueueBuild() {
@@ -272,6 +276,180 @@ async function getFavouriteTracksLibraryBridge() {
     firstHeosIds: heosUniqueIds.slice(0, 5),
     lastOfficialIds: officialIds.slice(-5),
     lastHeosIds: heosUniqueIds.slice(-5)
+  };
+}
+
+function favouriteTracksFingerprint(tracks) {
+  return tracks.map(track => String(track.id || '')).filter(Boolean).join(',');
+}
+
+async function refreshFavouriteTracksPlaybackValidation() {
+  if (favouriteTracksValidationRefresh) return favouriteTracksValidationRefresh;
+
+  const refresh = (async () => {
+    const bridge = await getFavouriteTracksLibraryBridge();
+    if (!bridge.ok) {
+      throw new Error(
+        'Favourite Tracks HEOS validation failed: official/HEOS identity or order mismatch'
+      );
+    }
+
+    const validatedAt = Date.now();
+    const entry = {
+      validatedAt,
+      fingerprint: favouriteTracksFingerprint(bridge.tracks),
+      trackCount: bridge.tracks.length,
+      heosUniqueTrackCount: bridge.heosUniqueTrackCount
+    };
+    favouriteTracksValidationCache = entry;
+    return entry;
+  })();
+
+  favouriteTracksValidationRefresh = refresh;
+  try {
+    return await refresh;
+  } finally {
+    if (favouriteTracksValidationRefresh === refresh) {
+      favouriteTracksValidationRefresh = null;
+    }
+  }
+}
+
+async function getValidatedFavouriteTracksForPlayback() {
+  const official = await tidalUserAuthRecon.getFavouriteTracks();
+  const tracks = Array.isArray(official.tracks) ? official.tracks : [];
+  if (!tracks.length) throw new Error('Favourite Tracks contains no current tracks');
+
+  const fingerprint = favouriteTracksFingerprint(tracks);
+  const now = Date.now();
+  const cached = favouriteTracksValidationCache;
+  const sameCollection = Boolean(cached && cached.fingerprint === fingerprint);
+  const ageMs = sameCollection ? now - cached.validatedAt : Infinity;
+
+  if (sameCollection && ageMs <= FAVOURITE_TRACKS_VALIDATION_TTL_MS) {
+    return { tracks, validationCached: true, validationAgeMs: ageMs };
+  }
+
+  if (sameCollection && ageMs <= FAVOURITE_TRACKS_VALIDATION_MAX_AGE_MS) {
+    if (!favouriteTracksValidationRefresh) {
+      refreshFavouriteTracksPlaybackValidation().catch(error => {
+        console.warn('TIDAL Favourite Tracks validation refresh failed:', error.message);
+      });
+    }
+    return { tracks, validationCached: true, validationAgeMs: ageMs, validationRefreshing: true };
+  }
+
+  const validation = await refreshFavouriteTracksPlaybackValidation();
+  if (validation.fingerprint !== fingerprint) {
+    throw new Error('Favourite Tracks changed during HEOS validation; retry playback');
+  }
+  return { tracks, validationCached: false, validationAgeMs: 0 };
+}
+
+async function queueCanonicalFavouriteTracks({ tracks, shuffle = false, startIndex = 0 }) {
+  const queueGeneration = supersedeTidalQueueBuild();
+  const cid = 'My Music-Tracks';
+  const heosCid = encodeURIComponent(cid).replace(/%20/g, ' ');
+  let queueTracks = tracks.slice(startIndex);
+  if (!queueTracks.length) throw new Error('Favourite Tracks queue selection is empty');
+
+  if (shuffle) {
+    queueTracks = queueTracks.slice();
+    for (let i = queueTracks.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [queueTracks[i], queueTracks[j]] = [queueTracks[j], queueTracks[i]];
+    }
+  }
+
+  let queuedCount = 0;
+  let skippedCount = 0;
+  let firstMid = '';
+  let cancelled = false;
+
+  for (const track of queueTracks) {
+    if (!tidalQueueBuildIsCurrent(queueGeneration)) {
+      cancelled = true;
+      break;
+    }
+
+    const mid = String(track.id || '');
+    if (!mid) {
+      skippedCount += 1;
+      continue;
+    }
+
+    const aid = queuedCount === 0 ? 4 : 3;
+    try {
+      const queueCommand = heosBrowse(
+        'heos://browse/add_to_queue?pid=' + encodeURIComponent(PLAYER_ID) +
+        '&sid=10&cid=' + heosCid +
+        '&mid=' + encodeURIComponent(mid) +
+        '&aid=' + aid,
+        15000
+      );
+      tidalFavouriteQueueCommand = queueCommand;
+      try {
+        await queueCommand;
+      } finally {
+        if (tidalFavouriteQueueCommand === queueCommand) {
+          tidalFavouriteQueueCommand = null;
+        }
+      }
+
+      if (!tidalQueueBuildIsCurrent(queueGeneration)) {
+        cancelled = true;
+        break;
+      }
+      if (queuedCount === 0) firstMid = mid;
+      queuedCount += 1;
+    } catch (error) {
+      if (!tidalQueueBuildIsCurrent(queueGeneration)) {
+        cancelled = true;
+        break;
+      }
+      skippedCount += 1;
+      console.warn(
+        'TIDAL FAVOURITE TRACK SKIP:',
+        JSON.stringify({
+          mid,
+          name: String(track.title || ''),
+          artist: String(track.artist || ''),
+          error: error.message
+        })
+      );
+    }
+  }
+
+  if (cancelled || !tidalQueueBuildIsCurrent(queueGeneration)) {
+    console.log(
+      'TIDAL FAVOURITE TRACK BUILD CANCELLED:',
+      JSON.stringify({
+        queued: queuedCount,
+        skipped: skippedCount,
+        attempted: queueTracks.length,
+        shuffle
+      })
+    );
+  }
+
+  if (!cancelled && tidalQueueBuildIsCurrent(queueGeneration) && !queuedCount) {
+    throw new Error('No Favourite Tracks could be queued');
+  }
+
+  if (!cancelled && tidalQueueBuildIsCurrent(queueGeneration)) {
+    await heosBrowse(
+      'heos://player/set_play_mode?pid=' + encodeURIComponent(PLAYER_ID) +
+      '&shuffle=off'
+    );
+  }
+
+  return {
+    cancelled: cancelled || !tidalQueueBuildIsCurrent(queueGeneration),
+    queued: queuedCount,
+    skipped: skippedCount,
+    attempted: queueTracks.length,
+    shuffle,
+    firstMid
   };
 }
 
@@ -1685,6 +1863,30 @@ const server = http.createServer(async (req, res) => {
         'play-only': 4
       };
 
+      if (action === 'play-from-here' && cid === 'My Music-Tracks') {
+        const validated = await getValidatedFavouriteTracksForPlayback();
+        const startIndex = validated.tracks.findIndex(
+          track => String(track.id || '') === mid
+        );
+        if (startIndex < 0) {
+          return sendJson(res, 404, { error: 'Selected track not found in canonical Favourite Tracks' });
+        }
+
+        const result = await queueCanonicalFavouriteTracks({
+          tracks: validated.tracks,
+          startIndex
+        });
+        return sendJson(res, 200, {
+          ok: true,
+          action,
+          selectedMid: mid,
+          ...result,
+          validationCached: validated.validationCached,
+          validationAgeMs: validated.validationAgeMs,
+          validationRefreshing: Boolean(validated.validationRefreshing)
+        });
+      }
+
       if (action === 'play-from-here') {
         const pageSize = 50;
         const tracks = [];
@@ -1696,13 +1898,8 @@ const server = http.createServer(async (req, res) => {
             'heos://browse/browse?sid=10&cid=' + encodeURIComponent(cid) +
             '&range=' + start + ',' + (start + pageSize - 1)
           );
-          const payload = Array.isArray(response.payload)
-            ? response.payload
-            : [];
-          tracks.push(...payload.filter(
-            item => item.playable === 'yes' && item.mid
-          ));
-
+          const payload = Array.isArray(response.payload) ? response.payload : [];
+          tracks.push(...payload.filter(item => item.playable === 'yes' && item.mid));
           const message = response.heos?.message || '';
           const countMatch = message.match(/(?:^|&)count=(\d+)/);
           if (countMatch) total = Number(countMatch[1]);
@@ -1711,40 +1908,24 @@ const server = http.createServer(async (req, res) => {
           if (total === null && payload.length < pageSize) break;
         }
 
-        const startIndex = tracks.findIndex(
-          item => String(item.mid) === mid
-        );
-
+        const startIndex = tracks.findIndex(item => String(item.mid) === mid);
         if (startIndex < 0) {
-          return sendJson(res, 404, {
-            error: 'Selected track not found in container'
-          });
+          return sendJson(res, 404, { error: 'Selected track not found in container' });
         }
-
         const remaining = tracks.slice(startIndex);
-
         await heosBrowse(
           'heos://browse/add_to_queue?pid=' + encodeURIComponent(PLAYER_ID) +
           '&sid=10&cid=' + encodeURIComponent(cid) +
-          '&mid=' + encodeURIComponent(remaining[0].mid) +
-          '&aid=4'
+          '&mid=' + encodeURIComponent(remaining[0].mid) + '&aid=4'
         );
-
         for (const track of remaining.slice(1)) {
           await heosBrowse(
             'heos://browse/add_to_queue?pid=' + encodeURIComponent(PLAYER_ID) +
             '&sid=10&cid=' + encodeURIComponent(cid) +
-            '&mid=' + encodeURIComponent(track.mid) +
-            '&aid=3'
+            '&mid=' + encodeURIComponent(track.mid) + '&aid=3'
           );
         }
-
-        return sendJson(res, 200, {
-          ok: true,
-          action,
-          queued: remaining.length,
-          selectedMid: mid
-        });
+        return sendJson(res, 200, { ok: true, action, queued: remaining.length, selectedMid: mid });
       }
 
       const aid = aidByAction[action];
@@ -1771,154 +1952,20 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && req.url.startsWith('/api/tidal/tracks/play-all?')) {
     try {
-      const queueGeneration = supersedeTidalQueueBuild();
       const url = new URL(req.url, 'http://localhost');
       const shuffle = url.searchParams.get('shuffle') === '1';
-      const cid = 'My Music-Tracks';
-      const cacheKey = cid + '|all';
-      const heosCid = encodeURIComponent(cid).replace(/%20/g, ' ');
-
-      const cachedResult = await tidalBrowseCache.get(
-        cacheKey,
-        async () => {
-          const pageSize = 50;
-          const allItems = [];
-          let start = 0;
-          let total = null;
-
-          while (total === null || start < total) {
-            const response = await heosBrowse(
-              'heos://browse/browse?sid=10&cid=' + heosCid +
-              '&range=' + start + ',' + (start + pageSize - 1)
-            );
-            const payload = Array.isArray(response.payload) ? response.payload : [];
-            allItems.push(...payload);
-            const message = response.heos?.message || '';
-            const countMatch = message.match(/(?:^|&)count=(\d+)/);
-            if (countMatch) total = Number(countMatch[1]);
-            if (!payload.length) break;
-            start += payload.length;
-            if (total === null && payload.length < pageSize) break;
-          }
-
-          return {
-            items: allItems.map(mapBrowseItem),
-            count: allItems.length
-          };
-        },
-        { refreshAfterMs: 15000, maxStaleMs: 12 * 60 * 60 * 1000 }
-      );
-
-      const tracks = (cachedResult.value.items || []).filter(
-        item => item.playable && item.mid
-      );
-      if (!tracks.length) {
-        throw new Error('Favourite Tracks contains no playable tracks');
-      }
-
-      const queueTracks = tracks.slice();
-      if (shuffle) {
-        for (let i = queueTracks.length - 1; i > 0; i -= 1) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [queueTracks[i], queueTracks[j]] = [queueTracks[j], queueTracks[i]];
-        }
-      }
-
-      let queuedCount = 0;
-      let skippedCount = 0;
-      let firstMid = '';
-
-      let cancelled = false;
-
-      for (const track of queueTracks) {
-        if (!tidalQueueBuildIsCurrent(queueGeneration)) {
-          cancelled = true;
-          break;
-        }
-
-        const aid = queuedCount === 0 ? 4 : 3;
-        try {
-          const queueCommand = heosBrowse(
-            'heos://browse/add_to_queue?pid=' + encodeURIComponent(PLAYER_ID) +
-            '&sid=10&cid=' + heosCid +
-            '&mid=' + encodeURIComponent(track.mid) +
-            '&aid=' + aid,
-            15000
-          );
-          tidalFavouriteQueueCommand = queueCommand;
-          try {
-            await queueCommand;
-          } finally {
-            if (tidalFavouriteQueueCommand === queueCommand) {
-              tidalFavouriteQueueCommand = null;
-            }
-          }
-          if (!tidalQueueBuildIsCurrent(queueGeneration)) {
-            cancelled = true;
-            break;
-          }
-          if (queuedCount === 0) firstMid = String(track.mid);
-          queuedCount += 1;
-        } catch (error) {
-          if (!tidalQueueBuildIsCurrent(queueGeneration)) {
-            cancelled = true;
-            break;
-          }
-
-          skippedCount += 1;
-          console.warn(
-            'TIDAL FAVOURITE TRACK SKIP:',
-            JSON.stringify({
-              mid: String(track.mid || ''),
-              name: String(track.name || ''),
-              artist: String(track.artist || ''),
-              error: error.message
-            })
-          );
-        }
-      }
-
-      if (cancelled || !tidalQueueBuildIsCurrent(queueGeneration)) {
-        console.log(
-          'TIDAL FAVOURITE TRACK BUILD CANCELLED:',
-          JSON.stringify({
-            queued: queuedCount,
-            skipped: skippedCount,
-            attempted: queueTracks.length,
-            shuffle
-          })
-        );
-
-        return sendJson(res, 200, {
-          ok: true,
-          cancelled: true,
-          queued: queuedCount,
-          skipped: skippedCount,
-          attempted: queueTracks.length,
-          shuffle,
-          firstMid,
-          sourceCached: cachedResult.cached
-        });
-      }
-
-      if (!queuedCount) {
-        throw new Error('No Favourite Tracks could be queued');
-      }
-
-      await heosBrowse(
-        'heos://player/set_play_mode?pid=' + encodeURIComponent(PLAYER_ID) +
-        '&shuffle=off'
-      );
+      const validated = await getValidatedFavouriteTracksForPlayback();
+      const result = await queueCanonicalFavouriteTracks({
+        tracks: validated.tracks,
+        shuffle
+      });
 
       return sendJson(res, 200, {
         ok: true,
-        cancelled: false,
-        queued: queuedCount,
-        skipped: skippedCount,
-        attempted: queueTracks.length,
-        shuffle,
-        firstMid,
-        sourceCached: cachedResult.cached
+        ...result,
+        validationCached: validated.validationCached,
+        validationAgeMs: validated.validationAgeMs,
+        validationRefreshing: Boolean(validated.validationRefreshing)
       });
     } catch (error) {
       return sendJson(res, 500, { error: error.message });
