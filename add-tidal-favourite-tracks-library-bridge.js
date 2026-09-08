@@ -113,26 +113,17 @@ const newRoutes = `  if (req.method === 'GET' && req.url.startsWith('/api/tidal/
 
   if (req.method === 'GET' && req.url.startsWith('/api/tidal/favourite-tracks')) {
     try {
-      const bridge = await getFavouriteTracksLibraryBridge();
-      if (!bridge.ok) {
-        return sendJson(res, 409, {
-          ok: false,
-          readOnly: true,
-          error: 'Favourite Tracks official/HEOS validation failed',
-          exactIdSetMatch: bridge.exactIdSetMatch,
-          sameOrder: bridge.sameOrder,
-          officialOnlyIds: bridge.officialOnlyIds,
-          heosOnlyIds: bridge.heosOnlyIds
-        });
-      }
+      const official = await tidalUserAuthRecon.getFavouriteTracks();
+      const tracks = Array.isArray(official.tracks) ? official.tracks : [];
       return sendJson(res, 200, {
         ok: true,
         readOnly: true,
-        cid: bridge.cid,
-        count: bridge.tracks.length,
-        cached: bridge.officialCached,
-        stale: bridge.officialStale,
-        tracks: bridge.tracks
+        cid: 'My Music-Tracks',
+        count: tracks.length,
+        cached: Boolean(official.cached),
+        stale: Boolean(official.stale),
+        refreshing: Boolean(official.refreshing),
+        tracks
       });
     } catch (error) {
       return sendJson(res, 502, { ok: false, readOnly: true, error: error.message });
@@ -163,4 +154,4 @@ const listenReplacement = `server.listen(HTTP_PORT, '0.0.0.0', () => {
 replaceOnce('server listen anchor', listenAnchor, listenReplacement);
 
 fs.writeFileSync(target, source);
-console.log('Added reusable Favourite Tracks library bridge, production read-only endpoint, and async prewarm.');
+console.log('Added reusable Favourite Tracks library bridge, fast production read-only endpoint, and async prewarm.');
