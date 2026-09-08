@@ -331,12 +331,7 @@ async function getValidatedFavouriteTracksForPlayback() {
   }
 
   if (sameCollection && ageMs <= FAVOURITE_TRACKS_VALIDATION_MAX_AGE_MS) {
-    if (!favouriteTracksValidationRefresh) {
-      refreshFavouriteTracksPlaybackValidation().catch(error => {
-        console.warn('TIDAL Favourite Tracks validation refresh failed:', error.message);
-      });
-    }
-    return { tracks, validationCached: true, validationAgeMs: ageMs, validationRefreshing: true };
+    return { tracks, validationCached: true, validationAgeMs: ageMs, validationRefreshDeferred: true };
   }
 
   const validation = await refreshFavouriteTracksPlaybackValidation();
