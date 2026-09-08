@@ -142,11 +142,11 @@ const newRoutes = `  if (req.method === 'GET' && req.url.startsWith('/api/tidal/
 `;
 source = source.slice(0, routeStartIndex) + newRoutes + source.slice(routeEndIndex);
 
-const listenAnchor = `server.listen(HTTP_PORT, () => {
-  console.log(\`Marantz backend listening on http://0.0.0.0:\${HTTP_PORT}\`);
+const listenAnchor = `server.listen(HTTP_PORT, '0.0.0.0', () => {
+  console.log(\`Marantz backend listening on port \${HTTP_PORT}; AI fallback \${AI_FALLBACK_ENABLED ? 'enabled' : 'disabled'}\`);
 });`;
-const listenReplacement = `server.listen(HTTP_PORT, () => {
-  console.log(\`Marantz backend listening on http://0.0.0.0:\${HTTP_PORT}\`);
+const listenReplacement = `server.listen(HTTP_PORT, '0.0.0.0', () => {
+  console.log(\`Marantz backend listening on port \${HTTP_PORT}; AI fallback \${AI_FALLBACK_ENABLED ? 'enabled' : 'disabled'}\`);
   setImmediate(() => {
     tidalUserAuthRecon.getFavouriteTracks()
       .then(result => console.log(
