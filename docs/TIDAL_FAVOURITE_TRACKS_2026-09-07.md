@@ -284,6 +284,56 @@ This production result confirms the key invariant for the captured live library:
 
 Do not generalise this as a universal TIDAL-ID-equals-HEOS-MID rule. It is specifically validated for the current direct HEOS `My Music-Tracks` library context; My Mixes retain their separate trusted resolver because their official IDs can differ from HEOS-playable identities.
 
+## Fast production display endpoint and startup prewarm — 2026-09-08
+
+The backend display path is now implemented and production-tested. Source checkpoint: `6f6ab2f` (`Add fast Favourite Tracks library endpoint`).
+
+The backend now starts an asynchronous `getFavouriteTracks()` prewarm only after the HTTP server has begun listening. In the live restart test:
+
+- backend listening: **11:46:18**
+- one handled first-level TIDAL 429 occurred on metadata batch 28 at **11:46:49**
+- prewarm completed with **594 tracks** at **11:46:52**
+- backend availability was therefore not blocked by the approximately 34-second cache build.
+
+Once prewarmed, the production read-only endpoint `/api/tidal/favourite-tracks` returned the complete 594-track rich official collection in approximately **15 ms** (`real 0m0.015s`) in the measured request. The response was verified as:
+
+- `ok: true`
+- `count: 594`
+- `cached: true`
+- `stale: false`
+- `refreshing: false`
+- first track ID: `487926786` — Lo Fidelity Allstars, `Battleflag`
+- last track ID: `2945500` — Screaming Trees, `Shadow of the Season`
+- rich official fields included artist/artist ID, album/album ID, duration, explicit flag, ISRC and 320×320 artwork URL.
+
+### Deliberate display/playback separation
+
+The production display endpoint **does not perform a live HEOS validation browse on every request**. An earlier migration draft did so, but full diff review caught that it would make every Tracks screen open perform the complete 635-row HEOS browse and would undermine the purpose of the fast official-TIDAL display path. That draft was discarded before commit/restart.
+
+The accepted architecture is:
+
+```text
+official TIDAL canonical cache
+        ↓
+/api/tidal/favourite-tracks
+        ↓
+fast rich 594-track display
+
+separate reusable official ↔ HEOS bridge
+        ↓
+read-only diagnostic validation / playback-boundary safety
+        ↓
+HEOS My Music-Tracks playback
+```
+
+This is an intentional refinement of the earlier wording that fresh display state itself should fail closed on live HEOS validation. **Official TIDAL is display authority; deterministic HEOS validation belongs at the playback boundary.** A slow or temporarily unavailable HEOS full-library browse must not prevent a valid cached TIDAL collection from being displayed.
+
+The reusable `getFavouriteTracksLibraryBridge()` remains in `server.js`. The existing read-only HEOS-validation probe now reuses it rather than carrying duplicate validation code. The bridge still reports `ok` only when the official and deduplicated HEOS ID sets match exactly **and** their order matches exactly.
+
+No queue, playback, AVR or TIDAL-favourite mutation was introduced in this display/prewarm stage.
+
+A separate startup log immediately after the successful prewarm showed `TIDAL TRUSTED CONTEXT INDEX REFRESH FAILED` for a HEOS playlist browse timeout. That belongs to the existing trusted-context/My-Mix machinery and is not evidence of Favourite Tracks prewarm failure; investigate separately if it becomes operationally significant.
+
 ## Playback implications
 
 The existing HEOS `My Music-Tracks` playback machinery currently operates on the raw 635-row HEOS collection. Migration must change the logical collection supplied to PLAY ALL / SHUFFLE ALL / PLAY FROM HERE so the new UI does not silently reintroduce HEOS's repeated blocks.
@@ -299,15 +349,25 @@ Preserve the critical HEOS CID rule: use literal-space `My Music-Tracks`, not `M
 
 ## Current checkpoint / next implementation step
 
-The canonical official loader/cache and the live read-only official↔HEOS validation have now passed production testing. The captured live invariant is 594 official current tracks = 594 unique HEOS MIDs, exact set and exact order.
+The backend **display-source stage is complete and production-validated**. The current backend branch contains:
 
-Next planned implementation stage:
+- canonical official loader/cache with accepted pacing;
+- non-blocking startup prewarm;
+- fast read-only `/api/tidal/favourite-tracks` endpoint serving the canonical 594 official tracks;
+- reusable read-only official↔HEOS library bridge;
+- confirmed 594/594 exact ID-set and order invariant for the captured `My Music-Tracks` library;
+- HEOS raw 635-row representation retained only as playback/correlation/diagnostic context, not display authority.
 
-1. make the canonical official 594-track collection the production Favourite Tracks display source;
-2. make PLAY FROM HERE / PLAY ALL / SHUFFLE ALL operate on that canonical logical collection rather than the raw 635 HEOS rows;
-3. retain direct deterministic HEOS playback in known `My Music-Tracks` context and preserve queue generation/cancellation/failure isolation;
-4. solve cold-start UX before Pi cutover, preferably with a simple backend prewarm/persisted-LKG decision rather than making the touchscreen wait for a cold 30–50 second rebuild;
-5. only then modify the MarantzPi `TRACKS` screen and perform playback-mutating acceptance tests with an explicit warning beforehand.
+The production source was committed as `6f6ab2f`; the spent migration helper was then removed in cleanup commit `1dba895`.
+
+Next planned implementation stage is the first **playback-mutating** stage:
+
+1. make PLAY FROM HERE use the selected index and tail of the canonical 594-track logical collection rather than the raw 635 HEOS rows;
+2. make PLAY ALL and SHUFFLE ALL queue the canonical 594 tracks rather than raw HEOS rows;
+3. preserve the existing queue generation/cancellation and per-track failure-isolation machinery;
+4. enforce deterministic HEOS identity/context at the playback boundary and fail closed rather than fuzzy-substituting;
+5. perform explicit playback-mutating runtime acceptance tests only after syntax/diff/restart checks;
+6. after backend playback acceptance, modify the MarantzPi `TRACKS` screen to consume `/api/tidal/favourite-tracks` as a continuous rich list without restoring the old HEOS-driven pager.
 
 Temporary migration/recon helpers are implementation tools, not production architecture, and should be removed after their findings/changes are safely committed and documented.
 
