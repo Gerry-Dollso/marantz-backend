@@ -230,6 +230,60 @@ Preferred direction, to be implemented and runtime-tested rather than assumed:
 
 The user's preference is a **continuous full Favourite Tracks list without restoring the old pager**, if the cached official-TIDAL implementation proves responsive enough. Do not promise this solely from reconnaissance timings; confirm with production/runtime testing.
 
+## Production canonical cache and pacing validation — 2026-09-08
+
+The canonical official-TIDAL Favourite Tracks loader is now implemented in `tidal-user-auth-recon.js` with an in-memory cache and one in-flight refresh. Production validation established:
+
+- canonical live tracks: **594**
+- saved relationship references: **635**
+- stale references naturally omitted by bulk metadata resolution: **41**
+- relationship pages: **32**
+- metadata batches: **32**
+- cold rebuild after final pacing: approximately **34.9 s** in the controlled run
+- warm cached response: effectively immediate (sub-millisecond HTTP timing observed in the earlier warm test)
+- stale-while-revalidate response: effectively immediate while background refresh proceeds.
+
+TIDAL rate limiting required conservative pacing. The accepted production settings are:
+
+- relationship-page delay: **500 ms**
+- metadata concurrency: **1**
+- metadata inter-batch delay: **250 ms**
+- bounded exponential 429 retry remains enabled.
+
+With these settings the controlled rebuild produced only **one first-level 429**, on metadata batch 32, versus 19 metadata 429s with concurrency 2. The retry succeeded and the complete 594-track canonical result remained correct. Chasing absolute zero 429s with additional fixed delay was not considered justified.
+
+## Live production official ↔ HEOS validation — 2026-09-08
+
+After the canonical cache was implemented, a dedicated **read-only** production route was added and run against the live backend. It performed no queue, playback, AVR, or collection mutation.
+
+Observed live result after a backend restart/cold official cache:
+
+- official current tracks: **594**
+- official saved references: **635**
+- official stale references: **41**
+- HEOS reported rows: **635**
+- HEOS raw/playable rows: **635**
+- HEOS unique MIDs after first-occurrence deduplication: **594**
+- HEOS duplicate excess occurrences: **41**
+- exact official/HEOS ID-set match: **true**
+- exact official/HEOS order match: **true**
+- official-only IDs: **none**
+- HEOS-only IDs: **none**
+
+The first five IDs were identical on both sides:
+
+`487926786`, `430143675`, `513907656`, `125226`, `501665`
+
+The last five IDs were also identical:
+
+`69724246`, `635819`, `3971684`, `33711684`, `2945500`
+
+The complete cold validation request took approximately **50.6 s**, which included both rebuilding the cold official canonical cache and browsing the full 635-row HEOS collection. This is a diagnostic/cold-start observation, not the intended Pi screen-open latency.
+
+This production result confirms the key invariant for the captured live library: the official 594-track canonical collection maps directly and deterministically to HEOS `My Music-Tracks` using the **same track ID as MID**, in the same logical order, after HEOS duplicate rows are ignored. Favourite Tracks therefore does **not** require the My-Mix trusted replacement resolver for this validated collection.
+
+Do not generalise this as a universal TIDAL-ID-equals-HEOS-MID rule. It is specifically validated for the current direct HEOS `My Music-Tracks` library context; My Mixes retain their separate trusted resolver because their official IDs can differ from HEOS-playable identities.
+
 ## Playback implications
 
 The existing HEOS `My Music-Tracks` playback machinery currently operates on the raw 635-row HEOS collection. Migration must change the logical collection supplied to PLAY ALL / SHUFFLE ALL / PLAY FROM HERE so the new UI does not silently reintroduce HEOS's repeated blocks.
@@ -245,15 +299,16 @@ Preserve the critical HEOS CID rule: use literal-space `My Music-Tracks`, not `M
 
 ## Current checkpoint / next implementation step
 
-Favourite Tracks reconnaissance is considered **complete enough to begin production implementation**. Further probes should only be added to answer a concrete implementation uncertainty.
+The canonical official loader/cache and the live read-only official↔HEOS validation have now passed production testing. The captured live invariant is 594 official current tracks = 594 unique HEOS MIDs, exact set and exact order.
 
-Next planned step:
+Next planned implementation stage:
 
-1. add a production backend canonical official-TIDAL Favourite Tracks collection function and cache;
-2. do **not** change Pi UI or playback routes in that first stage;
-3. validate the production function against the proven 594-track baseline and HEOS identity/order;
-4. only then wire display and canonical playback semantics.
+1. make the canonical official 594-track collection the production Favourite Tracks display source;
+2. make PLAY FROM HERE / PLAY ALL / SHUFFLE ALL operate on that canonical logical collection rather than the raw 635 HEOS rows;
+3. retain direct deterministic HEOS playback in known `My Music-Tracks` context and preserve queue generation/cancellation/failure isolation;
+4. solve cold-start UX before Pi cutover, preferably with a simple backend prewarm/persisted-LKG decision rather than making the touchscreen wait for a cold 30–50 second rebuild;
+5. only then modify the MarantzPi `TRACKS` screen and perform playback-mutating acceptance tests with an explicit warning beforehand.
 
-Temporary `recon-*` helpers are evidence/reconnaissance tools, not the intended production architecture. They may be removed in a later housekeeping commit after their findings are safely preserved here.
+Temporary migration/recon helpers are implementation tools, not production architecture, and should be removed after their findings/changes are safely committed and documented.
 
 Do not modify/delete the user's TIDAL favourites as part of this work; the 594-track consumer collection appears correct and the malformed 635-row representation is visible independently in HEOS.
