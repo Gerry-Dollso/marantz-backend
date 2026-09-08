@@ -57,6 +57,15 @@ let tidalQueueGeneration = 0;
 let tidalFavouriteQueueCommand = null;
 let favouriteTracksValidationCache = null;
 let favouriteTracksValidationRefresh = null;
+let favouriteTracksRollingSession = null;
+let favouriteTracksRollingReconcileTimer = null;
+let favouriteTracksRollingReconcilePromise = null;
+let heosEventSocket = null;
+let heosEventReconnectTimer = null;
+const FAVOURITE_TRACKS_ROLLING_INITIAL = 10;
+const FAVOURITE_TRACKS_ROLLING_LOW_WATER = 5;
+const FAVOURITE_TRACKS_ROLLING_BATCH = 5;
+const FAVOURITE_TRACKS_ROLLING_DEBOUNCE_MS = 750;
 const FAVOURITE_TRACKS_VALIDATION_TTL_MS = 5 * 60 * 1000;
 const FAVOURITE_TRACKS_VALIDATION_MAX_AGE_MS = 30 * 60 * 1000;
 const voiceAliases = createVoiceAliasStore();
@@ -341,10 +350,191 @@ async function getValidatedFavouriteTracksForPlayback() {
   return { tracks, validationCached: false, validationAgeMs: 0 };
 }
 
+function stopFavouriteTracksRollingSession(reason = 'superseded') {
+  const session = favouriteTracksRollingSession;
+  favouriteTracksRollingSession = null;
+  if (favouriteTracksRollingReconcileTimer) {
+    clearTimeout(favouriteTracksRollingReconcileTimer);
+    favouriteTracksRollingReconcileTimer = null;
+  }
+  if (session) {
+    console.log('TIDAL FAVOURITE ROLLING SESSION STOPPED:', JSON.stringify({
+      generation: session.generation,
+      reason,
+      queued: session.nextIndex,
+      total: session.tracks.length
+    }));
+  }
+}
+
+async function addFavouriteTrackToQueue(track, aid, generation) {
+  if (!tidalQueueBuildIsCurrent(generation)) return false;
+  const mid = String(track?.id || '');
+  if (!mid) throw new Error('Favourite Tracks contains a track without an id');
+  const heosCid = encodeURIComponent('My Music-Tracks').replace(/%20/g, ' ');
+  const queueCommand = heosBrowse(
+    'heos://browse/add_to_queue?pid=' + encodeURIComponent(PLAYER_ID) +
+    '&sid=10&cid=' + heosCid +
+    '&mid=' + encodeURIComponent(mid) +
+    '&aid=' + aid,
+    15000
+  );
+  tidalFavouriteQueueCommand = queueCommand;
+  try {
+    await queueCommand;
+  } finally {
+    if (tidalFavouriteQueueCommand === queueCommand) tidalFavouriteQueueCommand = null;
+  }
+  return tidalQueueBuildIsCurrent(generation);
+}
+
+async function getFavouriteTracksRollingQueueState(session) {
+  const nowPlaying = await heosBrowse(
+    'heos://player/get_now_playing_media?pid=' + encodeURIComponent(PLAYER_ID),
+    3000
+  );
+  const qid = Number(nowPlaying?.payload?.qid);
+  const mid = String(nowPlaying?.payload?.mid || '');
+  if (!Number.isInteger(qid) || qid < 1 || !mid) {
+    throw new Error('HEOS did not return a usable Favourite Tracks now-playing qid/mid');
+  }
+
+  const tailSize = Math.min(
+    FAVOURITE_TRACKS_ROLLING_INITIAL + FAVOURITE_TRACKS_ROLLING_BATCH,
+    session.nextIndex
+  );
+  const tailStartQid = Math.max(1, session.nextIndex - tailSize + 1);
+  const tailEndQid = session.nextIndex;
+  const queue = await heosBrowse(
+    'heos://player/get_queue?pid=' + encodeURIComponent(PLAYER_ID) +
+    '&range=' + (tailStartQid - 1) + ',' + (tailEndQid - 1),
+    5000
+  );
+  const rows = Array.isArray(queue.payload) ? queue.payload : [];
+  const message = String(queue?.heos?.message || '');
+  const countMatch = message.match(/(?:^|&)count=(\d+)/);
+  const count = countMatch ? Number(countMatch[1]) : null;
+  if (!Number.isInteger(count) || count < 0) {
+    throw new Error('HEOS did not return a usable Favourite Tracks queue count');
+  }
+  return { qid, mid, count, rows, tailStartQid, tailEndQid };
+}
+
+async function reconcileFavouriteTracksRollingSession() {
+  const session = favouriteTracksRollingSession;
+  if (!session || !tidalQueueBuildIsCurrent(session.generation)) return;
+  if (favouriteTracksRollingReconcilePromise) return favouriteTracksRollingReconcilePromise;
+
+  const work = (async () => {
+    const state = await getFavouriteTracksRollingQueueState(session);
+    if (!favouriteTracksRollingSession || favouriteTracksRollingSession !== session) return;
+
+    const currentIndex = session.tracks.findIndex(track => String(track.id || '') === state.mid);
+    if (currentIndex < 0) {
+      stopFavouriteTracksRollingSession('now-playing-left-canonical-session');
+      return;
+    }
+
+    const expectedTailStartIndex = state.tailStartQid - 1;
+    const expectedTail = session.tracks
+      .slice(expectedTailStartIndex, session.nextIndex)
+      .map(track => String(track.id || ''));
+    const actualTail = state.rows.map(row => String(row.mid || ''));
+    const actualQids = state.rows.map(row => Number(row.qid));
+    const expectedQids = expectedTail.map((_, index) => state.tailStartQid + index);
+    if (state.count !== session.nextIndex ||
+        actualTail.length !== expectedTail.length ||
+        actualTail.some((mid, index) => mid !== expectedTail[index]) ||
+        actualQids.some((qid, index) => qid !== expectedQids[index])) {
+      stopFavouriteTracksRollingSession('queue-changed-externally');
+      return;
+    }
+
+    const tracksAhead = state.count - state.qid;
+    if (tracksAhead >= FAVOURITE_TRACKS_ROLLING_LOW_WATER || session.nextIndex >= session.tracks.length) return;
+
+    const endIndex = Math.min(session.nextIndex + FAVOURITE_TRACKS_ROLLING_BATCH, session.tracks.length);
+    while (session.nextIndex < endIndex) {
+      const track = session.tracks[session.nextIndex];
+      const ok = await addFavouriteTrackToQueue(track, 3, session.generation);
+      if (!ok || favouriteTracksRollingSession !== session) return;
+      session.nextIndex += 1;
+    }
+
+    console.log('TIDAL FAVOURITE ROLLING REPLENISHED:', JSON.stringify({
+      generation: session.generation,
+      qid: state.qid,
+      previousCount: state.count,
+      count: session.nextIndex,
+      total: session.tracks.length
+    }));
+  })();
+
+  favouriteTracksRollingReconcilePromise = work;
+  try {
+    await work;
+  } catch (error) {
+    stopFavouriteTracksRollingSession('reconcile-failed');
+    console.error('TIDAL FAVOURITE ROLLING RECONCILE FAILED:', error.message);
+  } finally {
+    if (favouriteTracksRollingReconcilePromise === work) favouriteTracksRollingReconcilePromise = null;
+  }
+}
+
+function scheduleFavouriteTracksRollingReconcile() {
+  if (!favouriteTracksRollingSession || favouriteTracksRollingReconcileTimer) return;
+  favouriteTracksRollingReconcileTimer = setTimeout(() => {
+    favouriteTracksRollingReconcileTimer = null;
+    reconcileFavouriteTracksRollingSession();
+  }, FAVOURITE_TRACKS_ROLLING_DEBOUNCE_MS);
+}
+
+function startHeosEventConnection() {
+  if (heosEventSocket || heosEventReconnectTimer) return;
+  const socket = net.createConnection({ host: AVR_HOST, port: HEOS_PORT });
+  heosEventSocket = socket;
+  let buffer = '';
+
+  const reconnect = () => {
+    if (heosEventSocket === socket) heosEventSocket = null;
+    if (!heosEventReconnectTimer) {
+      heosEventReconnectTimer = setTimeout(() => {
+        heosEventReconnectTimer = null;
+        startHeosEventConnection();
+      }, 2000);
+    }
+  };
+
+  socket.on('connect', () => {
+    socket.write('heos://system/register_for_change_events?enable=on\r\n');
+  });
+  socket.on('data', chunk => {
+    buffer += chunk.toString('utf8');
+    while (buffer.includes('\n')) {
+      const i = buffer.indexOf('\n');
+      const line = buffer.slice(0, i).trim();
+      buffer = buffer.slice(i + 1);
+      if (!line) continue;
+      try {
+        const response = JSON.parse(line);
+        const command = String(response?.heos?.command || '');
+        const message = String(response?.heos?.message || '');
+        if (message.includes('pid=' + PLAYER_ID) &&
+            (command === 'event/player_now_playing_changed' || command === 'event/player_queue_changed')) {
+          scheduleFavouriteTracksRollingReconcile();
+        }
+      } catch {
+        // Ignore malformed/non-JSON event traffic.
+      }
+    }
+  });
+  socket.on('error', () => socket.destroy());
+  socket.on('close', reconnect);
+}
+
 async function queueCanonicalFavouriteTracks({ tracks, shuffle = false, startIndex = 0 }) {
-  const queueGeneration = supersedeTidalQueueBuild();
-  const cid = 'My Music-Tracks';
-  const heosCid = encodeURIComponent(cid).replace(/%20/g, ' ');
+  stopFavouriteTracksRollingSession('new-session');
+  const generation = supersedeTidalQueueBuild();
   let queueTracks = tracks.slice(startIndex);
   if (!queueTracks.length) throw new Error('Favourite Tracks queue selection is empty');
 
@@ -356,95 +546,47 @@ async function queueCanonicalFavouriteTracks({ tracks, shuffle = false, startInd
     }
   }
 
-  let queuedCount = 0;
-  let skippedCount = 0;
-  let firstMid = '';
-  let cancelled = false;
-
-  for (const track of queueTracks) {
-    if (!tidalQueueBuildIsCurrent(queueGeneration)) {
-      cancelled = true;
-      break;
-    }
-
-    const mid = String(track.id || '');
-    if (!mid) {
-      skippedCount += 1;
-      continue;
-    }
-
-    const aid = queuedCount === 0 ? 4 : 3;
-    try {
-      const queueCommand = heosBrowse(
-        'heos://browse/add_to_queue?pid=' + encodeURIComponent(PLAYER_ID) +
-        '&sid=10&cid=' + heosCid +
-        '&mid=' + encodeURIComponent(mid) +
-        '&aid=' + aid,
-        15000
-      );
-      tidalFavouriteQueueCommand = queueCommand;
-      try {
-        await queueCommand;
-      } finally {
-        if (tidalFavouriteQueueCommand === queueCommand) {
-          tidalFavouriteQueueCommand = null;
-        }
-      }
-
-      if (!tidalQueueBuildIsCurrent(queueGeneration)) {
-        cancelled = true;
-        break;
-      }
-      if (queuedCount === 0) firstMid = mid;
-      queuedCount += 1;
-    } catch (error) {
-      if (!tidalQueueBuildIsCurrent(queueGeneration)) {
-        cancelled = true;
-        break;
-      }
-      skippedCount += 1;
-      console.warn(
-        'TIDAL FAVOURITE TRACK SKIP:',
-        JSON.stringify({
-          mid,
-          name: String(track.title || ''),
-          artist: String(track.artist || ''),
-          error: error.message
-        })
-      );
-    }
+  const initialCount = Math.min(FAVOURITE_TRACKS_ROLLING_INITIAL, queueTracks.length);
+  let queued = 0;
+  for (let index = 0; index < initialCount; index += 1) {
+    const ok = await addFavouriteTrackToQueue(queueTracks[index], queued === 0 ? 4 : 3, generation);
+    if (!ok) return { cancelled: true, queued, skipped: 0, attempted: initialCount, shuffle, firstMid: '' };
+    queued += 1;
   }
 
-  if (cancelled || !tidalQueueBuildIsCurrent(queueGeneration)) {
-    console.log(
-      'TIDAL FAVOURITE TRACK BUILD CANCELLED:',
-      JSON.stringify({
-        queued: queuedCount,
-        skipped: skippedCount,
-        attempted: queueTracks.length,
-        shuffle
-      })
-    );
+  await heosBrowse(
+    'heos://player/set_play_mode?pid=' + encodeURIComponent(PLAYER_ID) + '&shuffle=off'
+  );
+
+  if (!tidalQueueBuildIsCurrent(generation)) {
+    return { cancelled: true, queued, skipped: 0, attempted: initialCount, shuffle, firstMid: '' };
   }
 
-  if (!cancelled && tidalQueueBuildIsCurrent(queueGeneration) && !queuedCount) {
-    throw new Error('No Favourite Tracks could be queued');
-  }
+  favouriteTracksRollingSession = {
+    generation,
+    tracks: queueTracks,
+    nextIndex: queued,
+    shuffle,
+    startedAt: Date.now()
+  };
+  startHeosEventConnection();
 
-  if (!cancelled && tidalQueueBuildIsCurrent(queueGeneration)) {
-    await heosBrowse(
-      'heos://player/set_play_mode?pid=' + encodeURIComponent(PLAYER_ID) +
-      '&shuffle=off'
-    );
-  }
+  console.log('TIDAL FAVOURITE ROLLING SESSION STARTED:', JSON.stringify({
+    generation,
+    queued,
+    total: queueTracks.length,
+    shuffle
+  }));
 
   return {
-    cancelled: cancelled || !tidalQueueBuildIsCurrent(queueGeneration),
-    queued: queuedCount,
-    skipped: skippedCount,
-    attempted: queueTracks.length,
+    cancelled: false,
+    queued,
+    skipped: 0,
+    attempted: initialCount,
     shuffle,
-    firstMid
+    firstMid: String(queueTracks[0]?.id || ''),
+    rolling: queueTracks.length > queued,
+    total: queueTracks.length
   };
 }
 
