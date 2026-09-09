@@ -2070,9 +2070,13 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 400, { error: 'Unknown track action' });
       }
 
+      const heosCid = cid === 'My Music-Tracks'
+        ? encodeURIComponent(cid).replace(/%20/g, ' ')
+        : encodeURIComponent(cid);
+
       await heosBrowse(
         'heos://browse/add_to_queue?pid=' + encodeURIComponent(PLAYER_ID) +
-        '&sid=10&cid=' + encodeURIComponent(cid) +
+        '&sid=10&cid=' + heosCid +
         '&mid=' + encodeURIComponent(mid) +
         '&aid=' + aid
       );
