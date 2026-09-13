@@ -1317,92 +1317,6 @@ function createTidalUserAuthRecon(options = {}) {
     );
   }
 
-  async function probeAlbumSingleMetadata(albumId) {
-    const id = String(albumId || '').trim();
-    if (!/^\d+$/.test(id)) throw new Error('album id must be numeric');
-
-    const payload = await apiGetRawWithRateLimitRetry(
-      '/albums/' + encodeURIComponent(id) + '?include=' + encodeURIComponent('artists,coverArt') +
-        '&countryCode=' + encodeURIComponent(countryCode),
-      'album single metadata probe ' + id
-    );
-    const data = payload?.data || null;
-    const included = Array.isArray(payload?.included) ? payload.included : [];
-    return {
-      ok: true,
-      readOnly: true,
-      requestedId: id,
-      returnedId: data?.id ? String(data.id) : null,
-      type: data?.type ? String(data.type) : null,
-      attributes: data?.attributes || {},
-      relationships: data?.relationships || {},
-      includedCount: included.length,
-      includedTypes: Object.fromEntries(Object.entries(included.reduce((counts, item) => {
-        const type = String(item?.type || 'unknown');
-        counts[type] = (counts[type] || 0) + 1;
-        return counts;
-      }, {})).sort(([a], [b]) => a.localeCompare(b)))
-    };
-  }
-
-  async function probeLibraryBulkMetadata(kind) {
-    const cleanKind = String(kind || '').trim().toLowerCase();
-    const config = cleanKind === 'artists'
-      ? { type: 'artists', include: 'profileArt' }
-      : cleanKind === 'albums'
-        ? { type: 'albums', include: 'artists,coverArt' }
-        : null;
-    if (!config) throw new Error('kind must be artists or albums');
-
-    const relationship = await getCollectionReferenceIds(cleanKind);
-    const ids = relationship.ids.slice(0, 20);
-    if (!ids.length) throw new Error('TIDAL ' + cleanKind + ' collection is empty');
-
-    const payload = await apiGetRawWithRateLimitRetry(
-      '/' + config.type + '?filter%5Bid%5D=' + encodeURIComponent(ids.join(',')) +
-        '&include=' + encodeURIComponent(config.include) +
-        '&countryCode=' + encodeURIComponent(countryCode),
-      cleanKind + ' bulk metadata probe'
-    );
-
-    const data = Array.isArray(payload?.data) ? payload.data : [];
-    const included = Array.isArray(payload?.included) ? payload.included : [];
-    const returnedIds = data
-      .filter(item => item?.type === config.type)
-      .map(item => String(item.id || ''));
-    const returnedSet = new Set(returnedIds);
-
-    return {
-      ok: true,
-      readOnly: true,
-      kind: cleanKind,
-      requestedCount: ids.length,
-      requestedIds: ids,
-      returnedCount: returnedIds.length,
-      returnedIds,
-      missingIds: ids.filter(id => !returnedSet.has(id)),
-      data: data.slice(0, 3).map(item => ({
-        id: String(item?.id || ''),
-        type: String(item?.type || ''),
-        attributes: item?.attributes || {},
-        relationships: item?.relationships || {}
-      })),
-      includedCount: included.length,
-      includedTypes: Object.fromEntries(
-        Object.entries(included.reduce((counts, item) => {
-          const type = String(item?.type || 'unknown');
-          counts[type] = (counts[type] || 0) + 1;
-          return counts;
-        }, {})).sort(([a], [b]) => a.localeCompare(b))
-      ),
-      included: included.slice(0, 8).map(item => ({
-        id: String(item?.id || ''),
-        type: String(item?.type || ''),
-        attributes: item?.attributes || {}
-      }))
-    };
-  }
-
   async function probeRichMetadata() {
     await ensureSession();
 
@@ -1791,24 +1705,6 @@ async function probeSearch() {
         return sendJson(res, 200, { ok: true, artist });
       } catch (error) {
         return sendJson(res, 400, { ok: false, error: error.message });
-      }
-    }
-
-    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe-album-single-metadata') {
-      try {
-        const result = await probeAlbumSingleMetadata(requestUrl.searchParams.get('id'));
-        return sendJson(res, 200, result);
-      } catch (error) {
-        return sendJson(res, 400, { ok: false, readOnly: true, error: error.message });
-      }
-    }
-
-    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe-library-bulk-metadata') {
-      try {
-        const result = await probeLibraryBulkMetadata(requestUrl.searchParams.get('kind'));
-        return sendJson(res, 200, result);
-      } catch (error) {
-        return sendJson(res, 400, { ok: false, readOnly: true, error: error.message });
       }
     }
 
