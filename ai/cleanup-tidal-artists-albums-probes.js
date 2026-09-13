@@ -65,7 +65,10 @@ if (!server.includes("'/api/tidal/favourite-artists'")) {
 if (!server.includes("'/api/tidal/favourite-albums'")) {
   throw new Error('Production favourite-albums endpoint is missing; refusing to write');
 }
-if (!server.includes('TIDAL Artists prewarm ready:') || !server.includes('TIDAL Albums prewarm ready:')) {
+if (!server.includes("label: 'Artists'") ||
+    !server.includes("label: 'Albums'") ||
+    !server.includes("label: 'Favourite Tracks'") ||
+    !server.includes("'TIDAL ' + step.label + ' prewarm ready:'")) {
   throw new Error('Production sequential prewarm is missing; refusing to write');
 }
 
