@@ -1737,6 +1737,58 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  if (req.method === 'GET' && req.url.startsWith('/api/tidal/favourite-artists')) {
+    try {
+      const official = await tidalUserAuthRecon.getFavouriteArtists();
+      const artists = Array.isArray(official.items) ? official.items.map(artist => ({
+        ...artist,
+        cid: 'LIBARTIST-' + artist.id
+      })) : [];
+      return sendJson(res, 200, {
+        ok: true,
+        readOnly: true,
+        cid: 'My Music-Artists',
+        count: artists.length,
+        referenceCount: official.referenceCount,
+        staleReferenceCount: official.staleReferenceCount,
+        staleReferenceIds: official.staleReferenceIds,
+        cached: Boolean(official.cached),
+        stale: Boolean(official.stale),
+        refreshing: Boolean(official.refreshing),
+        buildMs: official.buildMs,
+        artists
+      });
+    } catch (error) {
+      return sendJson(res, 502, { ok: false, readOnly: true, error: error.message });
+    }
+  }
+
+  if (req.method === 'GET' && req.url.startsWith('/api/tidal/favourite-albums')) {
+    try {
+      const official = await tidalUserAuthRecon.getFavouriteAlbums();
+      const albums = Array.isArray(official.items) ? official.items.map(album => ({
+        ...album,
+        cid: 'LIBALBUM-' + album.id
+      })) : [];
+      return sendJson(res, 200, {
+        ok: true,
+        readOnly: true,
+        cid: 'My Music-Albums',
+        count: albums.length,
+        referenceCount: official.referenceCount,
+        staleReferenceCount: official.staleReferenceCount,
+        staleReferenceIds: official.staleReferenceIds,
+        cached: Boolean(official.cached),
+        stale: Boolean(official.stale),
+        refreshing: Boolean(official.refreshing),
+        buildMs: official.buildMs,
+        albums
+      });
+    } catch (error) {
+      return sendJson(res, 502, { ok: false, readOnly: true, error: error.message });
+    }
+  }
+
   if (req.method === 'GET' && req.url.startsWith('/api/tidal/favourite-tracks')) {
     try {
       const official = await tidalUserAuthRecon.getFavouriteTracks();
@@ -1753,6 +1805,90 @@ const server = http.createServer(async (req, res) => {
       });
     } catch (error) {
       return sendJson(res, 502, { ok: false, readOnly: true, error: error.message });
+    }
+  }
+
+  if (req.method === 'GET' && req.url.startsWith('/api/tidal/oauth/probe-library-id-reconciliation?')) {
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      const kind = String(url.searchParams.get('kind') || '').trim();
+      const config = kind === 'artists'
+        ? { cid: 'My Music-Artists', prefix: 'LIBARTIST-' }
+        : kind === 'albums'
+          ? { cid: 'My Music-Albums', prefix: 'LIBALBUM-' }
+          : null;
+
+      if (!config) return sendJson(res, 400, { ok: false, error: 'kind must be artists or albums' });
+
+      const official = await tidalUserAuthRecon.getCollectionReferenceIds(kind);
+      const heosIds = [];
+      const heosSeen = new Set();
+      const duplicateHeosIds = [];
+      const invalidHeosCids = [];
+      let start = 0;
+      let total = null;
+      let pages = 0;
+
+      while (total === null || start < total) {
+        if (pages >= 100) throw new Error('HEOS ' + kind + ' pagination safety limit reached');
+        const response = await heosBrowse(
+          'heos://browse/browse?sid=10&cid=' + encodeURIComponent(config.cid).replace(/%20/g, ' ') +
+          '&range=' + start + ',' + (start + 49)
+        );
+        const payload = Array.isArray(response.payload) ? response.payload : [];
+        const message = String(response.heos?.message || '');
+        const countMatch = message.match(/(?:^|&)count=(\d+)/);
+        if (countMatch) total = Number(countMatch[1]);
+
+        for (const item of payload) {
+          const cid = String(item?.cid || '');
+          if (!cid.startsWith(config.prefix)) {
+            invalidHeosCids.push(cid);
+            continue;
+          }
+          const id = cid.slice(config.prefix.length);
+          if (!/^\d+$/.test(id)) {
+            invalidHeosCids.push(cid);
+            continue;
+          }
+          if (heosSeen.has(id)) duplicateHeosIds.push(id);
+          else {
+            heosSeen.add(id);
+            heosIds.push(id);
+          }
+        }
+
+        pages += 1;
+        if (!payload.length) break;
+        start += payload.length;
+        if (total === null && payload.length < 50) break;
+      }
+
+      const officialSet = new Set(official.ids);
+      const heosSet = new Set(heosIds);
+      const missingFromHeos = official.ids.filter(id => !heosSet.has(id));
+      const extraInHeos = heosIds.filter(id => !officialSet.has(id));
+
+      return sendJson(res, 200, {
+        ok: true,
+        readOnly: true,
+        kind,
+        officialCount: official.ids.length,
+        officialPages: official.pages,
+        heosCount: heosIds.length,
+        heosPages: pages,
+        sameIdSet: missingFromHeos.length === 0 && extraInHeos.length === 0,
+        missingFromHeosCount: missingFromHeos.length,
+        extraInHeosCount: extraInHeos.length,
+        duplicateHeosIdCount: duplicateHeosIds.length,
+        invalidHeosCidCount: invalidHeosCids.length,
+        missingFromHeos: missingFromHeos.slice(0, 50),
+        extraInHeos: extraInHeos.slice(0, 50),
+        duplicateHeosIds: duplicateHeosIds.slice(0, 50),
+        invalidHeosCids: invalidHeosCids.slice(0, 50)
+      });
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, readOnly: true, error: error.message });
     }
   }
 
@@ -2209,16 +2345,42 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(HTTP_PORT, '0.0.0.0', () => {
   console.log(`Marantz backend listening on port ${HTTP_PORT}; AI fallback ${AI_FALLBACK_ENABLED ? 'enabled' : 'disabled'}`);
-  setImmediate(() => {
-    tidalUserAuthRecon.getFavouriteTracks()
-      .then(result => console.log(
-        'TIDAL Favourite Tracks prewarm ready:',
-        Array.isArray(result.tracks) ? result.tracks.length : 0,
-        'tracks'
-      ))
-      .catch(error => console.warn(
-        'TIDAL Favourite Tracks prewarm failed:',
-        error.message
-      ));
+  setImmediate(async () => {
+    const prewarmSteps = [
+      {
+        label: 'Artists',
+        load: () => tidalUserAuthRecon.getFavouriteArtists(),
+        count: result => Array.isArray(result.items) ? result.items.length : 0,
+        noun: 'artists'
+      },
+      {
+        label: 'Albums',
+        load: () => tidalUserAuthRecon.getFavouriteAlbums(),
+        count: result => Array.isArray(result.items) ? result.items.length : 0,
+        noun: 'albums'
+      },
+      {
+        label: 'Favourite Tracks',
+        load: () => tidalUserAuthRecon.getFavouriteTracks(),
+        count: result => Array.isArray(result.tracks) ? result.tracks.length : 0,
+        noun: 'tracks'
+      }
+    ];
+
+    for (const step of prewarmSteps) {
+      try {
+        const result = await step.load();
+        console.log(
+          'TIDAL ' + step.label + ' prewarm ready:',
+          step.count(result),
+          step.noun
+        );
+      } catch (error) {
+        console.warn(
+          'TIDAL ' + step.label + ' prewarm failed:',
+          error.message
+        );
+      }
+    }
   });
 });

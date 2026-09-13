@@ -111,6 +111,10 @@ function createTidalUserAuthRecon(options = {}) {
   const personalisedArtworkCache = new Map();
   const favouriteTracksCache = { value: null, expiresAt: 0 };
   let favouriteTracksRefreshInFlight = null;
+  const favouriteArtistsCache = { value: null, expiresAt: 0 };
+  const favouriteAlbumsCache = { value: null, expiresAt: 0 };
+  let favouriteArtistsRefreshInFlight = null;
+  let favouriteAlbumsRefreshInFlight = null;
   const PERSONALISED_RECOMMENDATIONS_TTL_MS = 5 * 60 * 1000;
   const FAVOURITE_TRACKS_TTL_MS = 5 * 60 * 1000;
   const FAVOURITE_TRACKS_MAX_PAGES = 250;
@@ -661,6 +665,56 @@ function createTidalUserAuthRecon(options = {}) {
     }
   }
 
+  async function getCollectionReferenceIds(kind) {
+    const config = kind === 'artists'
+      ? { type: 'artists', label: 'Saved Artists', path: '/userCollectionArtists/me/relationships/items?countryCode=' + encodeURIComponent(countryCode) }
+      : kind === 'albums'
+        ? { type: 'albums', label: 'Saved Albums', path: '/userCollectionAlbums/me/relationships/items?countryCode=' + encodeURIComponent(countryCode) }
+        : null;
+
+    if (!config) throw new Error('Unsupported TIDAL collection kind');
+
+    const ids = [];
+    const seenIds = new Set();
+    const seenPages = new Set();
+    let next = config.path;
+    let pages = 0;
+
+    while (next) {
+      if (pages >= FAVOURITE_TRACKS_MAX_PAGES) {
+        throw new Error('TIDAL ' + config.label + ' pagination safety limit reached');
+      }
+
+      const path = normaliseApiPath(next);
+      if (seenPages.has(path)) {
+        throw new Error('TIDAL ' + config.label + ' pagination repeated a page');
+      }
+      seenPages.add(path);
+
+      const payload = await apiGetRawWithRateLimitRetry(path, config.label + ' relationship page ' + (pages + 1));
+      const data = Array.isArray(payload?.data) ? payload.data : [];
+      for (const linkage of data) {
+        const id = String(linkage?.id || '').trim();
+        if (linkage?.type !== config.type || !/^\d+$/.test(id)) {
+          throw new Error('TIDAL ' + config.label + ' relationship contained an invalid linkage');
+        }
+        if (seenIds.has(id)) {
+          throw new Error('TIDAL ' + config.label + ' relationship contained duplicate id ' + id);
+        }
+        seenIds.add(id);
+        ids.push(id);
+      }
+
+      next = payload?.links?.next || null;
+      pages += 1;
+      if (next) {
+        await new Promise(resolve => setTimeout(resolve, FAVOURITE_TRACKS_RELATIONSHIP_PAGE_DELAY_MS));
+      }
+    }
+
+    return { kind, ids, pages };
+  }
+
   async function getFavouriteTrackReferenceIds() {
     const ids = [];
     const seenIds = new Set();
@@ -865,6 +919,165 @@ function createTidalUserAuthRecon(options = {}) {
       }
       throw error;
     }
+  }
+
+  async function getLibraryMetadataBatch(kind, ids, batchNumber) {
+    const requested = ids.map(id => String(id));
+    if (!requested.length || requested.length > FAVOURITE_TRACKS_BATCH_SIZE) {
+      throw new Error('TIDAL ' + kind + ' metadata batch size is invalid');
+    }
+
+    const config = kind === 'artists'
+      ? { type: 'artists', include: 'profileArt' }
+      : kind === 'albums'
+        ? { type: 'albums', include: 'artists,coverArt' }
+        : null;
+    if (!config) throw new Error('Unsupported TIDAL library metadata kind');
+
+    const payload = await apiGetRawWithRateLimitRetry(
+      '/' + config.type + '?filter%5Bid%5D=' + encodeURIComponent(requested.join(',')) +
+        '&include=' + encodeURIComponent(config.include) +
+        '&countryCode=' + encodeURIComponent(countryCode),
+      kind + ' metadata batch ' + batchNumber
+    );
+    const data = Array.isArray(payload?.data) ? payload.data : [];
+    const included = Array.isArray(payload?.included) ? payload.included : [];
+    const requestedSet = new Set(requested);
+    const resources = buildResourceMap([...data, ...included]);
+    const values = [];
+
+    for (const resource of data) {
+      const id = String(resource?.id || '');
+      if (resource?.type !== config.type || !requestedSet.has(id)) {
+        throw new Error('TIDAL ' + kind + ' bulk metadata returned an unexpected resource');
+      }
+
+      if (kind === 'artists') {
+        const artworkLink = relationshipItems(resource.relationships?.profileArt)[0] || null;
+        const artwork = artworkLink ? resources.get(resourceKey(artworkLink)) : null;
+        const name = String(resource.attributes?.name || '');
+        if (!name) throw new Error('TIDAL Artists metadata is incomplete for artist ' + id);
+        values.push({
+          id,
+          name,
+          artwork: pickArtworkHref(artwork)
+        });
+      } else {
+        const artistLink = relationshipItems(resource.relationships?.artists)[0] || null;
+        const artist = artistLink ? resources.get(resourceKey(artistLink)) : null;
+        const artworkLink = relationshipItems(resource.relationships?.coverArt)[0] || null;
+        const artwork = artworkLink ? resources.get(resourceKey(artworkLink)) : null;
+        const title = String(resource.attributes?.title || '');
+        const artistName = String(artist?.attributes?.name || '');
+        if (!title || !artistName) throw new Error('TIDAL Albums metadata is incomplete for album ' + id);
+        values.push({
+          id,
+          title,
+          artist: artistName,
+          artistId: artist?.id ? String(artist.id) : null,
+          releaseDate: resource.attributes?.releaseDate ? String(resource.attributes.releaseDate) : null,
+          explicit: resource.attributes?.explicit === true,
+          numberOfItems: Number.isFinite(Number(resource.attributes?.numberOfItems)) ? Number(resource.attributes.numberOfItems) : null,
+          mediaTags: Array.isArray(resource.attributes?.mediaTags) ? resource.attributes.mediaTags.map(String) : [],
+          artwork: pickArtworkHref(artwork)
+        });
+      }
+    }
+    return values;
+  }
+
+  async function refreshOfficialLibrary(kind) {
+    const isArtists = kind === 'artists';
+    const cache = isArtists ? favouriteArtistsCache : favouriteAlbumsCache;
+    const currentInFlight = isArtists ? favouriteArtistsRefreshInFlight : favouriteAlbumsRefreshInFlight;
+    if (currentInFlight) return currentInFlight;
+
+    const promise = (async () => {
+      const startedAt = Date.now();
+      const relationship = await getCollectionReferenceIds(kind);
+      const batches = [];
+      for (let i = 0; i < relationship.ids.length; i += FAVOURITE_TRACKS_BATCH_SIZE) {
+        batches.push(relationship.ids.slice(i, i + FAVOURITE_TRACKS_BATCH_SIZE));
+      }
+      const batchValues = await mapWithConcurrency(
+        batches,
+        FAVOURITE_TRACKS_METADATA_CONCURRENCY,
+        (batch, index) => getLibraryMetadataBatch(kind, batch, index + 1)
+      );
+      const byId = new Map();
+      for (const values of batchValues) {
+        for (const value of values) {
+          if (byId.has(value.id)) throw new Error('TIDAL ' + kind + ' metadata returned duplicate id ' + value.id);
+          byId.set(value.id, value);
+        }
+      }
+      const items = [];
+      const staleReferenceIds = [];
+      for (const id of relationship.ids) {
+        const value = byId.get(id);
+        if (value) items.push(value);
+        else staleReferenceIds.push(id);
+      }
+      if (!items.length && relationship.ids.length) throw new Error('TIDAL ' + kind + ' resolved zero live items');
+
+      const refreshedAt = Date.now();
+      const value = {
+        items,
+        count: items.length,
+        referenceCount: relationship.ids.length,
+        staleReferenceCount: staleReferenceIds.length,
+        staleReferenceIds,
+        relationshipPages: relationship.pages,
+        metadataBatches: batches.length,
+        buildMs: refreshedAt - startedAt,
+        refreshedAt: new Date(refreshedAt).toISOString()
+      };
+      cache.value = value;
+      cache.expiresAt = refreshedAt + FAVOURITE_TRACKS_TTL_MS;
+      return value;
+    })();
+
+    if (isArtists) favouriteArtistsRefreshInFlight = promise;
+    else favouriteAlbumsRefreshInFlight = promise;
+    try {
+      return await promise;
+    } finally {
+      if (isArtists) favouriteArtistsRefreshInFlight = null;
+      else favouriteAlbumsRefreshInFlight = null;
+    }
+  }
+
+  async function getOfficialLibrary(kind, options = {}) {
+    if (kind !== 'artists' && kind !== 'albums') throw new Error('Unsupported TIDAL official library kind');
+    const isArtists = kind === 'artists';
+    const cache = isArtists ? favouriteArtistsCache : favouriteAlbumsCache;
+    const inFlight = () => isArtists ? favouriteArtistsRefreshInFlight : favouriteAlbumsRefreshInFlight;
+    const forceRefresh = options?.forceRefresh === true;
+    const now = Date.now();
+
+    if (!forceRefresh && cache.value) {
+      if (now < cache.expiresAt) return { ...cache.value, cached: true, stale: false, refreshing: Boolean(inFlight()) };
+      if (!inFlight()) {
+        refreshOfficialLibrary(kind).catch(error => console.error('TIDAL ' + kind + ' background refresh failed:', error.message));
+      }
+      return { ...cache.value, cached: true, stale: true, refreshing: true };
+    }
+
+    try {
+      const value = await refreshOfficialLibrary(kind);
+      return { ...value, cached: false, stale: false, refreshing: false };
+    } catch (error) {
+      if (cache.value) return { ...cache.value, cached: true, stale: true, refreshing: false, refreshError: error.message };
+      throw error;
+    }
+  }
+
+  async function getFavouriteArtists(options = {}) {
+    return getOfficialLibrary('artists', options);
+  }
+
+  async function getFavouriteAlbums(options = {}) {
+    return getOfficialLibrary('albums', options);
   }
 
   async function probeRecommendations() {
@@ -1102,6 +1315,92 @@ function createTidalUserAuthRecon(options = {}) {
       '?include=' + encodeURIComponent('profileArt') +
       '&countryCode=' + encodeURIComponent(countryCode)
     );
+  }
+
+  async function probeAlbumSingleMetadata(albumId) {
+    const id = String(albumId || '').trim();
+    if (!/^\d+$/.test(id)) throw new Error('album id must be numeric');
+
+    const payload = await apiGetRawWithRateLimitRetry(
+      '/albums/' + encodeURIComponent(id) + '?include=' + encodeURIComponent('artists,coverArt') +
+        '&countryCode=' + encodeURIComponent(countryCode),
+      'album single metadata probe ' + id
+    );
+    const data = payload?.data || null;
+    const included = Array.isArray(payload?.included) ? payload.included : [];
+    return {
+      ok: true,
+      readOnly: true,
+      requestedId: id,
+      returnedId: data?.id ? String(data.id) : null,
+      type: data?.type ? String(data.type) : null,
+      attributes: data?.attributes || {},
+      relationships: data?.relationships || {},
+      includedCount: included.length,
+      includedTypes: Object.fromEntries(Object.entries(included.reduce((counts, item) => {
+        const type = String(item?.type || 'unknown');
+        counts[type] = (counts[type] || 0) + 1;
+        return counts;
+      }, {})).sort(([a], [b]) => a.localeCompare(b)))
+    };
+  }
+
+  async function probeLibraryBulkMetadata(kind) {
+    const cleanKind = String(kind || '').trim().toLowerCase();
+    const config = cleanKind === 'artists'
+      ? { type: 'artists', include: 'profileArt' }
+      : cleanKind === 'albums'
+        ? { type: 'albums', include: 'artists,coverArt' }
+        : null;
+    if (!config) throw new Error('kind must be artists or albums');
+
+    const relationship = await getCollectionReferenceIds(cleanKind);
+    const ids = relationship.ids.slice(0, 20);
+    if (!ids.length) throw new Error('TIDAL ' + cleanKind + ' collection is empty');
+
+    const payload = await apiGetRawWithRateLimitRetry(
+      '/' + config.type + '?filter%5Bid%5D=' + encodeURIComponent(ids.join(',')) +
+        '&include=' + encodeURIComponent(config.include) +
+        '&countryCode=' + encodeURIComponent(countryCode),
+      cleanKind + ' bulk metadata probe'
+    );
+
+    const data = Array.isArray(payload?.data) ? payload.data : [];
+    const included = Array.isArray(payload?.included) ? payload.included : [];
+    const returnedIds = data
+      .filter(item => item?.type === config.type)
+      .map(item => String(item.id || ''));
+    const returnedSet = new Set(returnedIds);
+
+    return {
+      ok: true,
+      readOnly: true,
+      kind: cleanKind,
+      requestedCount: ids.length,
+      requestedIds: ids,
+      returnedCount: returnedIds.length,
+      returnedIds,
+      missingIds: ids.filter(id => !returnedSet.has(id)),
+      data: data.slice(0, 3).map(item => ({
+        id: String(item?.id || ''),
+        type: String(item?.type || ''),
+        attributes: item?.attributes || {},
+        relationships: item?.relationships || {}
+      })),
+      includedCount: included.length,
+      includedTypes: Object.fromEntries(
+        Object.entries(included.reduce((counts, item) => {
+          const type = String(item?.type || 'unknown');
+          counts[type] = (counts[type] || 0) + 1;
+          return counts;
+        }, {})).sort(([a], [b]) => a.localeCompare(b))
+      ),
+      included: included.slice(0, 8).map(item => ({
+        id: String(item?.id || ''),
+        type: String(item?.type || ''),
+        attributes: item?.attributes || {}
+      }))
+    };
   }
 
   async function probeRichMetadata() {
@@ -1495,6 +1794,24 @@ async function probeSearch() {
       }
     }
 
+    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe-album-single-metadata') {
+      try {
+        const result = await probeAlbumSingleMetadata(requestUrl.searchParams.get('id'));
+        return sendJson(res, 200, result);
+      } catch (error) {
+        return sendJson(res, 400, { ok: false, readOnly: true, error: error.message });
+      }
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe-library-bulk-metadata') {
+      try {
+        const result = await probeLibraryBulkMetadata(requestUrl.searchParams.get('kind'));
+        return sendJson(res, 200, result);
+      } catch (error) {
+        return sendJson(res, 400, { ok: false, readOnly: true, error: error.message });
+      }
+    }
+
     if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe-rich-metadata') {
       try {
         const metadata = await probeRichMetadata();
@@ -1657,7 +1974,10 @@ async function probeSearch() {
     handle,
     getTrackMetadata: probeTrackMetadata,
     getPersonalisedPlaylist,
-    getFavouriteTracks
+    getFavouriteTracks,
+    getFavouriteArtists,
+    getFavouriteAlbums,
+    getCollectionReferenceIds
   };
 }
 
