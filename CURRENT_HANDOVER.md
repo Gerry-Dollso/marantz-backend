@@ -4,6 +4,20 @@ This is the authoritative short handover for current MarantzPi / HP backend TIDA
 
 ## Current direction
 
+As of 13 Sep 2026, the official-TIDAL catalogue migration is production-accepted for **Favourite Tracks, Artists and Albums**. The governing architecture is still **official TIDAL API for what the user sees; HEOS for what the user hears**. Do not regress these screens to HEOS-led display browsing merely because HEOS remains the playback/drill-in transport.
+
+Current accepted catalogue state:
+
+- Favourite Tracks: 594 live official tracks; production endpoint `/api/tidal/favourite-tracks`; full continuous Pi list; existing individual actions plus PLAY ALL/SHUFFLE ALL retained.
+- Artists: 393 official collection references, 392 live artist resources, one unresolved/stale reference (ID `32968323`); production endpoint `/api/tidal/favourite-artists`. The 392 live official IDs match the HEOS artist IDs after the stale reference is omitted.
+- Albums: 1,535 official collection references and 1,535 matching HEOS album IDs; 1,482 live official album resources returned by the production rich-metadata loader, leaving 53 unresolved/stale references. Three sampled unresolved IDs were individually confirmed as official 404s; do not claim all 53 were individually probed. Production endpoint `/api/tidal/favourite-albums`.
+- Artists/Albums preserve generated HEOS-compatible `LIBARTIST-<id>` / `LIBALBUM-<id>` CIDs, so the existing HEOS-backed artist→album and album→track drill-ins and playback paths remain unchanged. Live touchscreen acceptance proved Artist drill-in, Album drill-in, Album PLAY RANDOM and ordinary album-track PLAY NOW.
+- Backend startup prewarm is deliberately sequential in the order **Artists → Albums → Favourite Tracks** and runs after HTTP listen. Each stage fails independently without preventing later stages.
+
+The next unfinished catalogue migration is **ordinary My Music Playlists**. These playlists are visible directly in HEOS and must first be reconciled read-only against the official TIDAL user-playlist collection and HEOS `LIBPLAYLIST-*` IDs. Do not treat this as a My Mix/personalised resolver problem and do not reopen the closed Sugarcubes/Birthday investigation merely to migrate ordinary playlists. Prove the playlist identity mapping before changing display or playback code.
+
+Current cleaned/pushed repository checkpoints after Artists/Albums acceptance and helper cleanup are backend `f4e1476 — Remove Artists and Albums migration helpers` and Pi `497e6a5 — Remove Artists and Albums UI migration helper`. Production implementation checkpoints immediately before cleanup include backend `2ba75d0 — Add official TIDAL Artists and Albums catalogues` and Pi `998589b — Use official TIDAL Artists and Albums UI`.
+
 
 ## Proactive architecture roadmap
 
@@ -83,13 +97,13 @@ Detailed microphone/ASR notes are maintained in the `marantz-voice` README and C
 
 ## Current tested checkpoints
 
-Backend tested functional source checkpoint: `ad56d23 — Require selected My Mix track for play from here`.
+Backend current cleaned/pushed checkpoint: `f4e1476 — Remove Artists and Albums migration helpers`.
 
-Backend clean repository checkpoint after migration-helper removal: `9ac4924 — Remove strict play from here helper`.
+Backend Artists/Albums production implementation checkpoint: `2ba75d0 — Add official TIDAL Artists and Albums catalogues`.
 
-Pi tested functional source checkpoint: `041b035 — Make TIDAL track actions reusable`.
+Pi current cleaned/pushed checkpoint: `497e6a5 — Remove Artists and Albums UI migration helper`.
 
-Pi current repository/documentation checkpoint: `0769f88 — Remove Play From Here documentation helper`.
+Pi Artists/Albums production implementation checkpoint: `998589b — Use official TIDAL Artists and Albums UI`.
 
 The Pi landing page for My Mix 1-8, My Daily Discovery and My New Arrivals renders official TIDAL names/descriptions immediately, then progressively fills each card with a 2x2 collage from up to four distinct official album covers. Landing artwork now uses a dedicated first-page-only backend endpoint with an independent 30-minute cache. Pi enrichment is sequential and a failed card receives one delayed retry. End-to-end testing populated all ten cards from a genuinely cold backend cache. Personalised track rows show official artwork, title, artist and album.
 
