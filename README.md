@@ -21,6 +21,36 @@ Current future-opportunity backlog:
 
 These are approved directions/opportunities, not permission to install or implement them automatically. Run each material change by the user first.
 
+## 2026-09-13 — Official Favourite Tracks catalogue and rolling playback checkpoint
+
+- The backend now treats official TIDAL user-library relationships as the catalogue/display authority for Favourite Tracks. `GET /api/tidal/favourite-tracks` exposes the canonical **594 live tracks** with official artwork, title, artist, album and IDs; stale official relationships are omitted.
+- Reconciliation proved the official 594-track set/order matches the de-duplicated live HEOS My Music-Tracks representation. The official relationship list contained 635 references, of which 41 were stale; independently, the HEOS browse returned 635 rows containing 41 duplicate rows. After omitting the stale official relationships and de-duplicating HEOS by first occurrence, both sides matched exactly at 594 tracks in the same order. Official IDs can therefore be used directly as HEOS MIDs for this validated collection.
+- Full Favourite Tracks playback uses the accepted rolling queue architecture: initial 10 tracks, replenish 5 when fewer than 5 remain ahead, persistent HEOS event handling, debounced qid/count reconciliation, bounded tail verification, fail-closed external-queue divergence and generation supersession.
+- PLAY ALL follows canonical saved order. SHUFFLE ALL shuffles the canonical 594-track order once in the backend and keeps HEOS shuffle disabled. PLAY FROM HERE rolls the canonical tail beginning at the selected official track.
+- Ordinary Favourite Tracks actions PLAY NOW, PLAY NEXT, ADD TO END and PLAY ONLY continue through HEOS `browse/add_to_queue`. Live testing proved HEOS requires the literal-space CID `My Music-Tracks`; sending `My%20Music-Tracks` causes `eid=14&text=cannot play`. Preserve the literal-space conversion for this container.
+- End-to-end Pi acceptance passed all seven actions: PLAY FROM HERE, PLAY ALL, SHUFFLE ALL, PLAY ONLY, ADD END, PLAY NEXT and PLAY NOW.
+- The companion Pi now renders the complete 594-track collection as one continuous rich official-TIDAL list with no HEOS pager. HEOS remains playback transport.
+
+Current tested backend source checkpoint:
+
+```text
+08a86ce — Fix Favourite Tracks ordinary actions
+```
+
+Current backend cleanup checkpoint:
+
+```text
+9ba3b6f — Remove Favourite Tracks action fix helper
+```
+
+Companion Pi documentation/cleanup checkpoint:
+
+```text
+be2d52f — Remove Favourite Tracks documentation helpers
+```
+
+Next TIDAL UI migration target: move My Music Artists, Albums and Playlists from the older HEOS browse-led display path to fast/rich official TIDAL catalogue data where deterministic playback identity can be preserved.
+
 ## 2026-09-01 — Lightweight personalised TIDAL artwork checkpoint
 
 - Added a dedicated lightweight personalised artwork path so the touchscreen no longer loads complete My Mix playlists merely to construct landing-card collages.
@@ -188,7 +218,7 @@ bada46d — Fix TIDAL browse cache library CIDs
 
 ## Full TIDAL Favourite Tracks playback
 
-`My Music-Tracks` is treated as one full saved-track collection rather than a 50-track page for playback purposes. The live collection had grown to **634 favourite tracks** by the 28 Aug cancellation test.
+`My Music-Tracks` is treated as one full saved-track collection rather than a 50-track page. The current accepted architecture uses **594 canonical live official TIDAL Favourite Tracks** for display and rolling playback. The older 634-track/full-queue-builder notes below describe the 28 Aug development history and are retained as historical context; they are not the current production queue architecture.
 
 The backend exposes:
 

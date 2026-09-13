@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-09-13 — Official TIDAL Favourite Tracks display and rolling playback accepted
+
+- Completed the Favourite Tracks hybrid architecture: official TIDAL is catalogue/display authority and HEOS remains playback transport. `GET /api/tidal/favourite-tracks` returns the canonical 594 live tracks with rich official metadata and artwork.
+- Reconciliation established that the 594 live official IDs match the de-duplicated HEOS My Music-Tracks IDs and order. The official relationship list contained 635 references with 41 stale relationships; separately, the HEOS browse returned 635 rows with 41 duplicate rows. Omitting the stale official relationships and de-duplicating HEOS by first occurrence produced the same 594 tracks in the same order, allowing the validated official IDs to be used directly as HEOS MIDs for this collection.
+- Accepted rolling PLAY ALL / SHUFFLE ALL / PLAY FROM HERE instead of building all 594 HEOS queue rows at once: initial 10, low-water fewer than 5 ahead, replenish 5, persistent HEOS events, debounced qid/count reconciliation, bounded tail verification, fail-closed divergence and generation supersession.
+- Fixed ordinary Favourite Tracks actions by preserving HEOS's required literal-space `My Music-Tracks` CID rather than passing `My%20Music-Tracks`. Before the fix HEOS returned `eid=14&text=cannot play`; after it, PLAY ONLY, ADD END, PLAY NEXT and PLAY NOW all passed live acceptance.
+- End-to-end Pi acceptance also passed PLAY FROM HERE, PLAY ALL and SHUFFLE ALL, giving all seven Favourite Tracks actions a live tested checkpoint.
+- Companion Pi migration replaced the old Tracks pager with one continuous 594-track official-TIDAL list showing artwork, title, artist and album while retaining the existing action menu and playback routes.
+- Temporary migration/action/documentation helpers were removed after verification.
+
+Backend production/checkpoint sequence:
+
+```text
+4d6da8c — Use rolling Favourite Tracks queue
+abdf6ba — Remove Favourite Tracks rolling migration helpers
+08a86ce — Fix Favourite Tracks ordinary actions
+9ba3b6f — Remove Favourite Tracks action fix helper
+```
+
+Companion Pi production/documentation checkpoints:
+
+```text
+27be5d1 — Use official TIDAL Favourite Tracks UI
+be2d52f — Remove Favourite Tracks documentation helpers
+```
+
+Next migration target is My Music Artists, Albums and Playlists: prefer official TIDAL for fast/rich catalogue display while retaining deterministic HEOS playback where required.
+
 ## 2026-09-04 — AVR TCP/23 recurrence isolated to AVR recovery
 
 - A second spontaneous `UNKNOWN` source/status failure occurred during ordinary PHONO/vinyl listening, without voice/ReSpeaker activity.
