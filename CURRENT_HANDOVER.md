@@ -4,7 +4,7 @@ This is the authoritative short handover for current MarantzPi / HP backend TIDA
 
 ## Current direction
 
-As of 13 Sep 2026, the official-TIDAL catalogue migration is production-accepted for **Favourite Tracks, Artists and Albums**. The governing architecture is still **official TIDAL API for what the user sees; HEOS for what the user hears**. Do not regress these screens to HEOS-led display browsing merely because HEOS remains the playback/drill-in transport.
+As of 14 Sep 2026, the official-TIDAL catalogue migration is production-accepted for **Favourite Tracks, Artists, Albums and ordinary My Music Playlists**. The governing architecture is still **official TIDAL API for what the user sees; HEOS for what the user hears**. Do not regress these screens to HEOS-led display browsing merely because HEOS remains the playback/drill-in transport.
 
 Current accepted catalogue state:
 
@@ -14,9 +14,9 @@ Current accepted catalogue state:
 - Artists/Albums preserve generated HEOS-compatible `LIBARTIST-<id>` / `LIBALBUM-<id>` CIDs, so the existing HEOS-backed artist→album and album→track drill-ins and playback paths remain unchanged. Live touchscreen acceptance proved Artist drill-in, Album drill-in, Album PLAY RANDOM and ordinary album-track PLAY NOW.
 - Backend startup prewarm is deliberately sequential in the order **Artists → Albums → Favourite Tracks** and runs after HTTP listen. Each stage fails independently without preventing later stages.
 
-The next unfinished catalogue migration is **ordinary My Music Playlists**. These playlists are visible directly in HEOS and must first be reconciled read-only against the official TIDAL user-playlist collection and HEOS `LIBPLAYLIST-*` IDs. Do not treat this as a My Mix/personalised resolver problem and do not reopen the closed Sugarcubes/Birthday investigation merely to migrate ordinary playlists. Prove the playlist identity mapping before changing display or playback code.
+- Ordinary Playlists: production endpoint `/api/tidal/favourite-playlists` uses the **live exact-ID intersection** of the official TIDAL user-playlist collection and HEOS ordinary `Created by me` / `Favorited` branches. At acceptance time this was 53 official references versus 34 HEOS ordinary playlists (13 Created by me + 21 Favorited), with 19 official-only personalised Mix/Radio resources and zero HEOS-only IDs. Do not hard-code the current 34 IDs or blacklist the current 19; the library is dynamic. Preserve HEOS grouping and exact `LIBPLAYLIST-*` CIDs while using official TIDAL metadata/artwork. USER and EDITORIAL playlist types are both valid. Live Pi acceptance proved both catalogue branches, rich artwork, HEOS-backed track drill-in, PLAY NOW, PLAY ALL and SHUFFLE ALL. See `docs/TIDAL_PLAYLISTS_2026-09-14.md`.
 
-Current cleaned/pushed repository checkpoints after Artists/Albums acceptance and helper cleanup are backend `f4e1476 — Remove Artists and Albums migration helpers` and Pi `497e6a5 — Remove Artists and Albums UI migration helper`. Production implementation checkpoints immediately before cleanup include backend `2ba75d0 — Add official TIDAL Artists and Albums catalogues` and Pi `998589b — Use official TIDAL Artists and Albums UI`.
+Current ordinary-Playlists checkpoints: backend production `43902d1 — Add official TIDAL ordinary Playlists catalogue`, backend cleanup `0f6bf7b — Remove ordinary Playlists migration helpers`, Pi production `d2f96e4 — Use official TIDAL ordinary Playlists UI`, Pi cleanup `1e810ed — Remove ordinary Playlists UI migration helper`.
 
 
 ## Proactive architecture roadmap
@@ -97,13 +97,15 @@ Detailed microphone/ASR notes are maintained in the `marantz-voice` README and C
 
 ## Current tested checkpoints
 
-Backend current cleaned/pushed checkpoint: `f4e1476 — Remove Artists and Albums migration helpers`.
+Backend current cleaned/pushed checkpoint: `0f6bf7b — Remove ordinary Playlists migration helpers`.
 
-Backend Artists/Albums production implementation checkpoint: `2ba75d0 — Add official TIDAL Artists and Albums catalogues`.
+Backend ordinary Playlists production implementation checkpoint: `43902d1 — Add official TIDAL ordinary Playlists catalogue`.
 
-Pi current cleaned/pushed checkpoint: `497e6a5 — Remove Artists and Albums UI migration helper`.
+Pi current cleaned/pushed checkpoint: `1e810ed — Remove ordinary Playlists UI migration helper`.
 
-Pi Artists/Albums production implementation checkpoint: `998589b — Use official TIDAL Artists and Albums UI`.
+Pi ordinary Playlists production implementation checkpoint: `d2f96e4 — Use official TIDAL ordinary Playlists UI`.
+
+Earlier Artists/Albums checkpoints remain `2ba75d0` backend production / `f4e1476` cleanup and `998589b` Pi production / `497e6a5` cleanup.
 
 The Pi landing page for My Mix 1-8, My Daily Discovery and My New Arrivals renders official TIDAL names/descriptions immediately, then progressively fills each card with a 2x2 collage from up to four distinct official album covers. Landing artwork now uses a dedicated first-page-only backend endpoint with an independent 30-minute cache. Pi enrichment is sequential and a failed card receives one delayed retry. End-to-end testing populated all ten cards from a genuinely cold backend cache. Personalised track rows show official artwork, title, artist and album.
 
