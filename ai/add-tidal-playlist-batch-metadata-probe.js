@@ -28,10 +28,10 @@ if (source.includes('probePlaylistBatchMetadata')) {
 }
 let updated = source.replace(anchor, fn + anchor);
 
-const routeAnchor = "    if (url.pathname === '/api/tidal/oauth/probe-playlist-raw') {";
+const routeAnchor = "    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe-playlist-raw') {";
 if (!updated.includes(routeAnchor)) throw new Error('Could not locate guarded Playlist route anchor');
 
-const route = `    if (url.pathname === '/api/tidal/oauth/probe-playlist-batch') {\n      try {\n        const batch = await probePlaylistBatchMetadata(url.searchParams.get('ids'));\n        return sendJson(res, 200, { ok: true, readOnly: true, batch });\n      } catch (error) {\n        return sendJson(res, 500, { ok: false, readOnly: true, error: error.message });\n      }\n    }\n\n`;
+const route = `    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe-playlist-batch') {\n      try {\n        const batch = await probePlaylistBatchMetadata(requestUrl.searchParams.get('ids'));\n        return sendJson(res, 200, { ok: true, readOnly: true, batch });\n      } catch (error) {\n        return sendJson(res, 500, { ok: false, readOnly: true, error: error.message });\n      }\n    }\n\n`;
 updated = updated.replace(routeAnchor, route + routeAnchor);
 fs.writeFileSync(file, updated);
 
