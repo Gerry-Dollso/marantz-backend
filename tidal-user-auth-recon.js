@@ -1080,6 +1080,126 @@ function createTidalUserAuthRecon(options = {}) {
     return getOfficialLibrary('albums', options);
   }
 
+  async function getFavouritePlaylistReferenceIds() {
+    const ids = [];
+    const seenIds = new Set();
+    const seenPages = new Set();
+    let next = '/userCollectionPlaylists/me/relationships/items?countryCode=' + encodeURIComponent(countryCode);
+    let pages = 0;
+
+    while (next) {
+      if (pages >= FAVOURITE_TRACKS_MAX_PAGES) {
+        throw new Error('TIDAL Favourite Playlists pagination safety limit reached');
+      }
+      const path = normaliseApiPath(next);
+      if (seenPages.has(path)) {
+        throw new Error('TIDAL Favourite Playlists pagination repeated a page');
+      }
+      seenPages.add(path);
+
+      const payload = await apiGetRawWithRateLimitRetry(
+        path,
+        'Favourite Playlists relationship page ' + (pages + 1)
+      );
+      const data = Array.isArray(payload?.data) ? payload.data : [];
+      for (const linkage of data) {
+        const id = String(linkage?.id || '').trim();
+        if (linkage?.type !== 'playlists' || !/^[a-zA-Z0-9-]+$/.test(id)) {
+          throw new Error('TIDAL Favourite Playlists relationship contained an invalid playlist linkage');
+        }
+        if (seenIds.has(id)) {
+          throw new Error('TIDAL Favourite Playlists relationship contained duplicate id ' + id);
+        }
+        seenIds.add(id);
+        ids.push(id);
+      }
+
+      next = payload?.links?.next || null;
+      pages += 1;
+      if (next) {
+        await new Promise(resolve => setTimeout(resolve, FAVOURITE_TRACKS_RELATIONSHIP_PAGE_DELAY_MS));
+      }
+    }
+
+    return { ids, pages };
+  }
+
+  async function getPlaylistMetadata(ids) {
+    const requested = Array.isArray(ids)
+      ? ids.map(id => String(id || '').trim()).filter(Boolean)
+      : [];
+    if (!requested.length) return { items: [], unresolvedIds: [], metadataBatches: 0 };
+    if (requested.some(id => !/^[a-zA-Z0-9-]+$/.test(id))) {
+      throw new Error('TIDAL Playlist metadata request contained an invalid playlist id');
+    }
+    if (new Set(requested).size !== requested.length) {
+      throw new Error('TIDAL Playlist metadata request contained duplicate ids');
+    }
+
+    const batches = [];
+    for (let i = 0; i < requested.length; i += FAVOURITE_TRACKS_BATCH_SIZE) {
+      batches.push(requested.slice(i, i + FAVOURITE_TRACKS_BATCH_SIZE));
+    }
+
+    const batchValues = await mapWithConcurrency(
+      batches,
+      FAVOURITE_TRACKS_METADATA_CONCURRENCY,
+      async (batch, index) => {
+        const payload = await apiGetRawWithRateLimitRetry(
+          '/playlists?filter%5Bid%5D=' + encodeURIComponent(batch.join(',')) +
+            '&include=' + encodeURIComponent('coverArt') +
+            '&countryCode=' + encodeURIComponent(countryCode),
+          'Playlist metadata batch ' + (index + 1)
+        );
+        const data = Array.isArray(payload?.data) ? payload.data : [];
+        const included = Array.isArray(payload?.included) ? payload.included : [];
+        const requestedSet = new Set(batch);
+        const resources = buildResourceMap([...data, ...included]);
+        const values = [];
+
+        for (const resource of data) {
+          const id = String(resource?.id || '');
+          if (resource?.type !== 'playlists' || !requestedSet.has(id)) {
+            throw new Error('TIDAL Playlist bulk metadata returned an unexpected resource');
+          }
+          const artworkLink = relationshipItems(resource.relationships?.coverArt)[0] || null;
+          const artwork = artworkLink ? resources.get(resourceKey(artworkLink)) : null;
+          const name = String(resource.attributes?.name || '');
+          if (!name) throw new Error('TIDAL Playlist metadata is incomplete for playlist ' + id);
+          values.push({
+            id,
+            name,
+            playlistType: resource.attributes?.playlistType ? String(resource.attributes.playlistType) : null,
+            numberOfItems: Number.isFinite(Number(resource.attributes?.numberOfItems)) ? Number(resource.attributes.numberOfItems) : null,
+            numberOfTrackItems: Number.isFinite(Number(resource.attributes?.numberOfTrackItems)) ? Number(resource.attributes.numberOfTrackItems) : null,
+            numberOfVideoItems: Number.isFinite(Number(resource.attributes?.numberOfVideoItems)) ? Number(resource.attributes.numberOfVideoItems) : null,
+            duration: resource.attributes?.duration ? String(resource.attributes.duration) : null,
+            lastModifiedAt: resource.attributes?.lastModifiedAt ? String(resource.attributes.lastModifiedAt) : null,
+            artwork: pickArtworkHref(artwork)
+          });
+        }
+        return values;
+      }
+    );
+
+    const byId = new Map();
+    for (const values of batchValues) {
+      for (const value of values) {
+        if (byId.has(value.id)) throw new Error('TIDAL Playlist metadata returned duplicate id ' + value.id);
+        byId.set(value.id, value);
+      }
+    }
+
+    const items = [];
+    const unresolvedIds = [];
+    for (const id of requested) {
+      const value = byId.get(id);
+      if (value) items.push(value);
+      else unresolvedIds.push(id);
+    }
+    return { items, unresolvedIds, metadataBatches: batches.length };
+  }
+
   async function probeRecommendations() {
     const resources = [
       ['dailyMixes', '/userDailyMixes/me?include=items&countryCode=' + encodeURIComponent(countryCode)],
@@ -1873,6 +1993,8 @@ async function probeSearch() {
     getFavouriteTracks,
     getFavouriteArtists,
     getFavouriteAlbums,
+    getFavouritePlaylistReferenceIds,
+    getPlaylistMetadata,
     getCollectionReferenceIds
   };
 }

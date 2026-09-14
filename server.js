@@ -62,6 +62,9 @@ let favouriteTracksRollingReconcileTimer = null;
 let favouriteTracksRollingReconcilePromise = null;
 let heosEventSocket = null;
 let heosEventReconnectTimer = null;
+let ordinaryPlaylistsCache = null;
+let ordinaryPlaylistsRefreshInFlight = null;
+const ORDINARY_PLAYLISTS_TTL_MS = 5 * 60 * 1000;
 const FAVOURITE_TRACKS_ROLLING_INITIAL = 10;
 const FAVOURITE_TRACKS_ROLLING_LOW_WATER = 5;
 const FAVOURITE_TRACKS_ROLLING_BATCH = 5;
@@ -1180,6 +1183,154 @@ function mapBrowseItem(item) {
   };
 }
 
+async function browseAllHeosPlaylistBranch(cid, label) {
+  const heosCid = encodeURIComponent(cid).replace(/%20/g, ' ');
+  const pageSize = 50;
+  const rows = [];
+  let start = 0;
+  let total = null;
+
+  while (total === null || start < total) {
+    const response = await heosBrowse(
+      'heos://browse/browse?sid=10&cid=' + heosCid +
+      '&range=' + start + ',' + (start + pageSize - 1)
+    );
+    const payload = Array.isArray(response.payload) ? response.payload : [];
+    rows.push(...payload);
+    const message = String(response.heos?.message || '');
+    const countMatch = message.match(/(?:^|&)count=(\d+)/);
+    if (countMatch) total = Number(countMatch[1]);
+    if (!payload.length) break;
+    start += payload.length;
+    if (total === null && payload.length < pageSize) break;
+  }
+
+  const items = rows.map((row, index) => {
+    const fullCid = String(row?.cid || '');
+    if (row?.type !== 'playlist' || row?.container !== 'yes' || row?.playable !== 'yes' || !fullCid.startsWith('LIBPLAYLIST-')) {
+      throw new Error('HEOS ' + label + ' returned an invalid playlist row at index ' + index);
+    }
+    const id = fullCid.slice('LIBPLAYLIST-'.length);
+    if (!id || !/^[a-zA-Z0-9-]+$/.test(id)) {
+      throw new Error('HEOS ' + label + ' returned an invalid playlist id at index ' + index);
+    }
+    return {
+      id,
+      cid: fullCid,
+      name: String(row?.name || ''),
+      artwork: String(row?.image_url || ''),
+      type: 'playlist',
+      container: true,
+      playable: true
+    };
+  });
+
+  return { cid, label, reportedCount: total, items };
+}
+
+async function refreshOrdinaryPlaylists() {
+  if (ordinaryPlaylistsRefreshInFlight) return ordinaryPlaylistsRefreshInFlight;
+
+  const refresh = (async () => {
+    const startedAt = Date.now();
+    const official = await tidalUserAuthRecon.getFavouritePlaylistReferenceIds();
+    const officialIds = Array.isArray(official.ids) ? official.ids.map(String) : [];
+    const officialSet = new Set(officialIds);
+
+    const created = await browseAllHeosPlaylistBranch(
+      'My Music-Playlists-Created by me',
+      'Created by me'
+    );
+    const favorited = await browseAllHeosPlaylistBranch(
+      'My Music-Playlists-Favorited',
+      'Favorited'
+    );
+
+    const heosRows = [...created.items, ...favorited.items];
+    const heosIds = heosRows.map(item => item.id);
+    const heosSet = new Set(heosIds);
+    if (heosSet.size !== heosIds.length) {
+      throw new Error('HEOS ordinary Playlists returned duplicate playlist ids across branches');
+    }
+
+    const intersectionIds = heosIds.filter(id => officialSet.has(id));
+    const metadata = await tidalUserAuthRecon.getPlaylistMetadata(intersectionIds);
+    const metadataById = new Map((metadata.items || []).map(item => [String(item.id), item]));
+
+    function buildBranch(branch) {
+      return branch.items
+        .filter(item => officialSet.has(item.id))
+        .map(item => {
+          const rich = metadataById.get(item.id) || null;
+          return {
+            ...(rich || { id: item.id, name: item.name || '' }),
+            cid: item.cid,
+            name: rich?.name || item.name || '',
+            artwork: rich?.artwork || item.artwork || null,
+            type: 'playlist',
+            container: true,
+            playable: true,
+            metadataSource: rich ? 'tidal' : 'heos-fallback'
+          };
+        });
+    }
+
+    const createdByMe = buildBranch(created);
+    const favoritedItems = buildBranch(favorited);
+    const refreshedAt = Date.now();
+    const value = {
+      createdByMe,
+      favorited: favoritedItems,
+      count: createdByMe.length + favoritedItems.length,
+      officialReferenceCount: officialIds.length,
+      officialRelationshipPages: Number(official.pages || 0),
+      heosCreatedReportedCount: created.reportedCount,
+      heosFavoritedReportedCount: favorited.reportedCount,
+      heosOrdinaryCount: heosRows.length,
+      officialOnlyCount: officialIds.filter(id => !heosSet.has(id)).length,
+      heosOnlyCount: heosIds.filter(id => !officialSet.has(id)).length,
+      unresolvedMetadataIds: Array.isArray(metadata.unresolvedIds) ? metadata.unresolvedIds : [],
+      metadataBatches: Number(metadata.metadataBatches || 0),
+      buildMs: refreshedAt - startedAt,
+      refreshedAt: new Date(refreshedAt).toISOString()
+    };
+    ordinaryPlaylistsCache = { value, expiresAt: refreshedAt + ORDINARY_PLAYLISTS_TTL_MS };
+    return value;
+  })();
+
+  ordinaryPlaylistsRefreshInFlight = refresh;
+  try {
+    return await refresh;
+  } finally {
+    if (ordinaryPlaylistsRefreshInFlight === refresh) ordinaryPlaylistsRefreshInFlight = null;
+  }
+}
+
+async function getOrdinaryPlaylists() {
+  const now = Date.now();
+  if (ordinaryPlaylistsCache?.value) {
+    if (now < ordinaryPlaylistsCache.expiresAt) {
+      return { ...ordinaryPlaylistsCache.value, cached: true, stale: false, refreshing: Boolean(ordinaryPlaylistsRefreshInFlight) };
+    }
+    if (!ordinaryPlaylistsRefreshInFlight) {
+      refreshOrdinaryPlaylists().catch(error => {
+        console.error('TIDAL ordinary Playlists background refresh failed:', error.message);
+      });
+    }
+    return { ...ordinaryPlaylistsCache.value, cached: true, stale: true, refreshing: true };
+  }
+
+  try {
+    const value = await refreshOrdinaryPlaylists();
+    return { ...value, cached: false, stale: false, refreshing: false };
+  } catch (error) {
+    if (ordinaryPlaylistsCache?.value) {
+      return { ...ordinaryPlaylistsCache.value, cached: true, stale: true, refreshing: false, refreshError: error.message };
+    }
+    throw error;
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
 
@@ -1783,6 +1934,20 @@ const server = http.createServer(async (req, res) => {
         refreshing: Boolean(official.refreshing),
         buildMs: official.buildMs,
         albums
+      });
+    } catch (error) {
+      return sendJson(res, 502, { ok: false, readOnly: true, error: error.message });
+    }
+  }
+
+  if (req.method === 'GET' && req.url.startsWith('/api/tidal/favourite-playlists')) {
+    try {
+      const playlists = await getOrdinaryPlaylists();
+      return sendJson(res, 200, {
+        ok: true,
+        readOnly: true,
+        cid: 'My Music-Playlists',
+        ...playlists
       });
     } catch (error) {
       return sendJson(res, 502, { ok: false, readOnly: true, error: error.message });
