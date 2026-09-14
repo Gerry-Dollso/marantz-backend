@@ -1,4 +1,4 @@
-# Current handover — 2 Sep 2026
+# Current handover — 14 Sep 2026
 
 This is the authoritative short handover for current MarantzPi / HP backend TIDAL work. Do not restart the closed Birthday/replacement reconnaissance unless a later code change specifically invalidates the evidence below.
 
@@ -10,7 +10,7 @@ Current accepted catalogue state:
 
 - Favourite Tracks: 594 live official tracks; production endpoint `/api/tidal/favourite-tracks`; full continuous Pi list; existing individual actions plus PLAY ALL/SHUFFLE ALL retained.
 - Artists: 393 official collection references, 392 live artist resources, one unresolved/stale reference (ID `32968323`); production endpoint `/api/tidal/favourite-artists`. The 392 live official IDs match the HEOS artist IDs after the stale reference is omitted.
-- Albums: 1,535 official collection references and 1,535 matching HEOS album IDs; 1,482 live official album resources returned by the production rich-metadata loader, leaving 53 unresolved/stale references. Three sampled unresolved IDs were individually confirmed as official 404s; do not claim all 53 were individually probed. Production endpoint `/api/tidal/favourite-albums`.
+- Albums: 1,535 official collection references and 1,535 matching HEOS album IDs; 1,482 live official album resources returned by the production rich-metadata loader, leaving 53 unresolved metadata resources. Three sampled unresolved IDs were individually confirmed as official 404s; do not claim all 53 were individually probed or individually proven stale. Production endpoint `/api/tidal/favourite-albums`.
 - Artists/Albums preserve generated HEOS-compatible `LIBARTIST-<id>` / `LIBALBUM-<id>` CIDs, so the existing HEOS-backed artist→album and album→track drill-ins and playback paths remain unchanged. Live touchscreen acceptance proved Artist drill-in, Album drill-in, Album PLAY RANDOM and ordinary album-track PLAY NOW.
 - Backend startup prewarm is deliberately sequential in the order **Artists → Albums → Favourite Tracks** and runs after HTTP listen. Each stage fails independently without preventing later stages.
 
@@ -18,6 +18,18 @@ Current accepted catalogue state:
 
 Current ordinary-Playlists checkpoints: backend production `43902d1 — Add official TIDAL ordinary Playlists catalogue`, backend cleanup `0f6bf7b — Remove ordinary Playlists migration helpers`, Pi production `d2f96e4 — Use official TIDAL ordinary Playlists UI`, Pi cleanup `1e810ed — Remove ordinary Playlists UI migration helper`.
 
+
+## Immediate next-chat work — agreed order
+
+The next chat should start from the clean checkpoints above and tackle these in order. Do not begin by changing production code; inspect the relevant current source and establish the read-only contract first.
+
+1. **Current Queue:** add a link/control on the Pi Now Playing screen to a live Current Queue view. The user ultimately wants to inspect, select, edit and reorder/sort tracks. Start read-only: establish the exact HEOS queue rows/count/qid/mid behaviour and how current/upcoming rows map to available artwork/title/artist/album metadata. The backend already issues HEOS `player/get_queue` internally for rolling Favourite Tracks verification and selected-item handling, but there is no general user-facing queue endpoint/control surface yet. Before adding remove/move/clear/play-selected commands, account for the accepted Favourite Tracks rolling session and personalised background queue builders so UI edits cannot race them or silently violate fail-closed queue ownership.
+
+2. **Now Playing favourite heart:** show whether the current canonical TIDAL track is in the user's collection and allow add/remove only after a read-only membership path and official mutation contract are proven. Never assume the currently playing HEOS MID is always the canonical official TIDAL ID: personalised/replacement cases such as The Sugarcubes — Birthday prove those identities can differ. Recon must be read-only and must never add/remove a real favourite. If mutation is later accepted, refresh/invalidate the relevant Favourite Tracks cache only after confirmed success.
+
+3. **TIDAL landing/home artwork:** generic browse rows currently create an artwork slot even when the item has no image, producing blank boxes. For the TIDAL landing/category screen, either remove the empty artwork slot for those categories or deliberately supply appropriate imagery. Do not fabricate remote artwork URLs or regress working navigation.
+
+4. **Richer artist page:** current HEOS-backed artist drill-in categories can likewise show blank generic artwork slots. Preserve those tested HEOS drill-ins/playback, but enrich the page with an official-TIDAL artist hero image and biography/description only if the developer API actually exposes supported fields/relationships. Research/probe read-only first; do not guess API shapes. Aim for a Roon/TIDAL-style header while keeping the existing Tracks/Albums/EPs/Other Albums/Similar routes working.
 
 ## Proactive architecture roadmap
 
@@ -30,6 +42,20 @@ Active future opportunities to preserve across handovers are: a lightweight SQLi
 The architecture is **official TIDAL API for what the user sees; HEOS for what the user hears**. Official TIDAL supplies personalised recommendations, canonical track/artist/album metadata, descriptions and artwork. HEOS/SR8015 remains playback transport. Existing HEOS browse/search routes remain available as fallback/diagnostic paths, but new catalogue UI should not regress to HEOS browsing when official metadata is available.
 
 Official TIDAL catalogue text search is currently access-blocked for this developer app (400 Invalid resource ID despite read-only search scope). Direct TIDAL playback to the SR8015 is parked.
+
+## Working method — mandatory for the next chat
+
+The user works from an Android phone/tablet with Termius and is not a software developer. Long terminal pastes are error-prone and Android clipboard handling is a real constraint. Use one small, explicit step at a time, label the target machine **HP** or **Pi**, explain whether the step is read-only or mutating, and wait for pasted output before continuing. A blank terminal result is commonly reported as 👍🏻.
+
+Prefer GitHub-side inspection and guarded migration helpers for source/document edits. The established safe pattern is: inspect the current branch in GitHub; add a small exact-guard helper; user runs a short `git pull`; run the helper locally; run syntax/diff checks; restart only the affected service; perform a narrow live acceptance test; inspect `git diff --check` and the exact diff; commit only accepted production files; remove the temporary helper in a separate cleanup commit; push; finish with blank `git status --short`. Do not ask the user to paste large source files or huge JSON blobs into Termius when GitHub can be inspected directly.
+
+For runtime-only evidence that GitHub cannot provide, use compact terminal probes and summarise JSON with small `python3 -c` commands where useful. Avoid broad service restarts and never restart both Pi and backend merely for convenience. Pi display service is the user service `marantz-display.service`; backend is system service `marantz-backend.service`. The unrelated Pi `marantz-mic-stream.service` must not be touched during display work.
+
+Never guess paths, owners, CIDs, player IDs, API fields or service names. Current backend constants in production source are AVR `192.168.50.220`, HEOS PID `48723103`, TIDAL HEOS SID `10`, HTTP port `3100`. Credentials remain outside Git in `/etc/marantz-backend/tidal.env`; do not print, move or commit them.
+
+Do not mutate TIDAL favourites, playlists, queue or AVR state during reconnaissance unless the user explicitly agrees to a live mutation test. Protect the working TIDAL resume path, rolling Favourite Tracks queue, personalised resolver/background queue builder, ordinary playlist intersection, and literal-space `My Music-Tracks` HEOS CID rule.
+
+Historical `ai/` and reconnaissance scripts remain in the backend repository as development evidence/tools. Do not mass-delete them merely to make the tree look cleaner. The important cleanliness rule is that temporary helpers for the current migration are removed after acceptance and production branches end with a clean working tree.
 
 ## Repositories and live branches
 
@@ -97,15 +123,13 @@ Detailed microphone/ASR notes are maintained in the `marantz-voice` README and C
 
 ## Current tested checkpoints
 
-Backend current cleaned/pushed checkpoint: `0f6bf7b — Remove ordinary Playlists migration helpers`.
+Backend pre-handover cleaned/pushed checkpoint: `b83b443 — Remove official TIDAL catalogue README updater`. The preceding permanent documentation checkpoint is `d3c247b — Document completed official TIDAL catalogue migration`.
 
-Backend ordinary Playlists production implementation checkpoint: `43902d1 — Add official TIDAL ordinary Playlists catalogue`.
+Pi final documentation-cleaned/pushed head: `649b272 — Remove handover documentation updater`; latest tested production cleanup before documentation-only commits: `1758311 — Remove TIDAL swipe return migration helper`. Latest tested production UI checkpoints are `36bd317 — Restore TIDAL browse with Now Playing swipe` and `84170a5 — Sort TIDAL Artists alphabetically`.
 
-Pi current cleaned/pushed checkpoint: `1e810ed — Remove ordinary Playlists UI migration helper`.
+Ordinary Playlists remain production-checkpointed at backend `43902d1` / cleanup `0f6bf7b`, and Pi `d2f96e4` / cleanup `1e810ed`. Earlier Artists/Albums checkpoints remain `2ba75d0` backend production / `f4e1476` cleanup and `998589b` Pi production / `497e6a5` cleanup. Favourite Tracks rolling production remains `4d6da8c`, with ordinary-action fix `08a86ce`.
 
-Pi ordinary Playlists production implementation checkpoint: `d2f96e4 — Use official TIDAL ordinary Playlists UI`.
-
-Earlier Artists/Albums checkpoints remain `2ba75d0` backend production / `f4e1476` cleanup and `998589b` Pi production / `497e6a5` cleanup.
+The Pi swipe-return acceptance is narrow and deliberate: TIDAL PLAY NOW / PLAY FROM HERE / PLAY ONLY arm a one-shot return from Now Playing to the preserved TIDAL browse screen. Manual TIDAL NOW PLAYING does not arm it. Swiping on a non-TIDAL MarantzPi input was live-tested and correctly did nothing. The external SR8015 HTTPS page retains native browser-back behaviour because MarantzPi JavaScript is not active there.
 
 The Pi landing page for My Mix 1-8, My Daily Discovery and My New Arrivals renders official TIDAL names/descriptions immediately, then progressively fills each card with a 2x2 collage from up to four distinct official album covers. Landing artwork now uses a dedicated first-page-only backend endpoint with an independent 30-minute cache. Pi enrichment is sequential and a failed card receives one delayed retry. End-to-end testing populated all ten cards from a genuinely cold backend cache. Personalised track rows show official artwork, title, artist and album.
 

@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-09-14 — Official catalogue migration complete; next UI/control phase
+
+- The official-TIDAL catalogue migration is production-accepted for Favourite Tracks, Artists, Albums and ordinary My Music Playlists. Official TIDAL remains display/catalogue authority; HEOS remains playback transport and drill-in where required.
+- Ordinary Playlists use the live exact-ID intersection of official userCollectionPlaylists and live HEOS Created by me/Favorited branches. Acceptance snapshot: 53 official references, 34 HEOS ordinary playlists (13 + 21), 19 official-only personalised Mix/Radio entries, zero HEOS-only. Counts are snapshots, not constants.
+- Artists: 393 relationship references, 392 live resources; the one missing ID was directly 404-tested. Albums: 1,535 relationship IDs match HEOS; 1,482 rich resources resolve, leaving 53 unresolved metadata resources; only three sampled IDs were individually 404-tested.
+- Companion Pi accepted alphabetical My Music Artists ordering and a narrowly gated swipe-back return from TIDAL-triggered Now Playing to the preserved browse screen. Other MarantzPi input screens remain swipe-trapped/no-op.
+- Next planned phase: Current Queue view/editing, Now Playing favourite heart, TIDAL landing-card artwork cleanup, and richer artist pages with official metadata where available.
+
+Current cleaned/pushed checkpoints:
+
+```text
+Backend: b83b443 — pre-handover clean checkpoint
+Pi:      649b272 — Remove handover documentation updater (latest tested production cleanup before docs: 1758311)
+```
+
 ## 2026-09-13 — Official TIDAL Favourite Tracks display and rolling playback accepted
 
 - Completed the Favourite Tracks hybrid architecture: official TIDAL is catalogue/display authority and HEOS remains playback transport. `GET /api/tidal/favourite-tracks` returns the canonical 594 live tracks with rich official metadata and artwork.
@@ -93,7 +108,7 @@ Companion Pi source checkpoint remains:
 - This change addresses the observed TIDAL 429/temporary failure pattern caused by unnecessary full-playlist artwork enrichment under cold-cache activity without weakening resolver or playback safety.
 - Verified the endpoint on My Mix 1 with four official artwork URLs and a warm-cache repeat.
 - End-to-end Pi testing populated all ten personalised cards from a genuine cold backend cache after restarting `marantz-backend.service`.
-- PLAY FROM HERE remains deliberately pending and is the next planned personalised queue-tail feature.
+- Historical note superseded: personalised PLAY FROM HERE was subsequently implemented and live-tested on 2 Sep 2026; see the later changelog entry above.
 
 Checkpoint:
 

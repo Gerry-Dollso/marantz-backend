@@ -1,5 +1,14 @@
 # marantz-backend
 
+## Current cleaned/pushed project checkpoints — 14 Sep 2026
+
+```text
+Backend: b83b443 — pre-handover clean checkpoint
+Pi:      649b272 — Remove handover documentation updater (latest tested production cleanup before docs: 1758311)
+```
+
+The official-TIDAL catalogue migration is production-accepted for Favourite Tracks, Artists, Albums and ordinary My Music Playlists. The Pi has also accepted alphabetical Artists ordering and a narrowly gated TIDAL Now Playing swipe-return. The next planned work is Current Queue visibility/editing, a Now Playing favourite heart, TIDAL landing-card artwork cleanup, and a richer artist page. See `CURRENT_HANDOVER.md` and `docs/NEXT_CHAT_HANDOVER_2026-09-14.md` before changing production code.
+
 
 ## Architecture principles and future opportunities
 
@@ -54,7 +63,7 @@ be2d52f — Remove Favourite Tracks documentation helpers
 The official-TIDAL catalogue migration is now production-accepted for **Favourite Tracks, Artists, Albums and ordinary My Music Playlists**. The governing architecture is **official TIDAL API for what the user sees; HEOS for what the user hears**.
 
 - Artists: 393 official collection references resolve to 392 live official artist resources; the one unresolved reference is stale/unavailable. The live 392 IDs match HEOS after that stale reference is omitted. Endpoint: `GET /api/tidal/favourite-artists`.
-- Albums: all 1,535 official collection relationship IDs match HEOS; rich official metadata currently resolves 1,482 resources, with 53 unresolved/stale references. Endpoint: `GET /api/tidal/favourite-albums`.
+- Albums: all 1,535 official collection relationship IDs match HEOS; rich official metadata currently resolves 1,482 resources, leaving 53 unresolved metadata resources. Three sampled unresolved IDs were individually confirmed as official 404s; do not claim all 53 were individually proven stale. Endpoint: `GET /api/tidal/favourite-albums`.
 - Artists and Albums preserve HEOS-compatible `LIBARTIST-*` / `LIBALBUM-*` CIDs, so existing HEOS drill-in and playback remain unchanged. Live touchscreen acceptance proved artist/album drill-in, album PLAY RANDOM and ordinary album-track PLAY NOW.
 - Ordinary Playlists use the **live exact-ID intersection** of the official TIDAL user-playlist collection and the two live HEOS ordinary branches, Created by me and Favorited. This is deliberately dynamic: no current playlist IDs or personalised Mix/Radio exclusions are hard-coded.
 - Playlist acceptance snapshot: 53 official relationship IDs over 3 pages; HEOS 13 Created by me + 21 Favorited = 34 ordinary playlists; all 34 were present officially, HEOS-only count was zero, and the 19 official-only resources were personalised Mixes/Radio. Counts are a snapshot, not permanent invariants.
@@ -95,7 +104,7 @@ Companion Pi checkpoint:
 300be7a — Fix personalised TIDAL artwork loading
 ```
 
-Next planned personalised-playlist work is PLAY FROM HERE: replace the queue with the selected track followed by all subsequent tracks from the same Mix in original order. It is not implemented yet.
+Personalised PLAY FROM HERE is implemented and live-tested: it replaces the queue with the selected track followed by the remaining tracks from the same Mix in original order, requires the selected first track to resolve safely, and preserves the accepted fast first-track/background-build architecture.
 
 ## 2026-08-31 — Fast personalised TIDAL playback and rich UI backend checkpoint
 
