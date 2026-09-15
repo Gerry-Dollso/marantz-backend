@@ -1,4 +1,4 @@
-# Current handover — 14 Sep 2026
+# Current handover — 15 Sep 2026
 
 This is the authoritative short handover for current MarantzPi / HP backend TIDAL work. Do not restart the closed Birthday/replacement reconnaissance unless a later code change specifically invalidates the evidence below.
 
@@ -19,17 +19,27 @@ Current accepted catalogue state:
 Current ordinary-Playlists checkpoints: backend production `43902d1 — Add official TIDAL ordinary Playlists catalogue`, backend cleanup `0f6bf7b — Remove ordinary Playlists migration helpers`, Pi production `d2f96e4 — Use official TIDAL ordinary Playlists UI`, Pi cleanup `1e810ed — Remove ordinary Playlists UI migration helper`.
 
 
+## Current Queue — production accepted 15 Sep 2026
+
+The read-only Current Queue stage is complete and live-tested on the Pi. Permanent checkpoints are Pi `41e8ab0 — Add read-only Current Queue API` and `1796f6c — Add read-only Current Queue UI`. The HP backend was deliberately not changed for this feature.
+
+The Pi now exposes read-only `GET /api/queue`, reusing its existing HEOS queue reader and a current-media query. The normalized response contains physical queue count plus qid, mid, albumId, song, artist, album, imageUrl and current-row state. The Now Playing QUEUE button opens a dedicated CURRENT QUEUE screen; the current row is highlighted as NOW PLAYING. The UI refreshes `/api/queue` every 5 seconds only while open, stops on BACK, preserves manual scroll position during refresh, and centres the current row only on initial open. Live acceptance confirmed the highlight advances automatically on a natural track transition.
+
+The key contract is **physical HEOS queue, not source/canonical length**. Favourite Tracks rolling playback was observed with 10 physical rows initially and 15 after the backend appended its next five-track batch. A user-created Chill Mix containing 125 source tracks exposed only 50 physical HEOS rows at that moment. My Mix 2 exposed 24 rows initially and later 40. Therefore the queue header reports exactly what HEOS currently materialises; never label a physical count as a source total or fabricate the unmaterialised remainder.
+
+HEOS queue rows already provide artwork, title, artist, album, qid, mid and album_id, so the HP official TIDAL API is not required for this basic queue viewer. Current-media qid/mid matched the corresponding physical row throughout live tests. Retained queue/current-position state while the AVR is off or after leaving NET is intentional MarantzPi resume behaviour and must not be treated as stale merely because receiver power is off.
+
+Queue viewing and queue mutation remain separate stages. No play-selected, remove, reorder, sort or clear controls were added. The user is currently satisfied with viewing and does not consider editing a priority. If mutation is revisited later, separately prove its interaction with ordinary HEOS playback, Favourite Tracks rolling playback and personalised/background queue builders; do not complicate or regress the accepted read-only viewer.
+
 ## Immediate next-chat work — agreed order
 
-The next chat should start from the clean checkpoints above and tackle these in order. Do not begin by changing production code; inspect the relevant current source and establish the read-only contract first.
+Current Queue is complete. Continue in this order, using GitHub for repository inspection and Termius only for runtime evidence/deployment checks that GitHub cannot provide. Do not begin production changes before the relevant read-only contract is understood.
 
-1. **Current Queue:** add a link/control on the Pi Now Playing screen to a live Current Queue view. The user ultimately wants to inspect, select, edit and reorder/sort tracks. Start read-only: establish the exact HEOS queue rows/count/qid/mid behaviour and how current/upcoming rows map to available artwork/title/artist/album metadata. The backend already issues HEOS `player/get_queue` internally for rolling Favourite Tracks verification and selected-item handling, but there is no general user-facing queue endpoint/control surface yet. Before adding remove/move/clear/play-selected commands, account for the accepted Favourite Tracks rolling session and personalised background queue builders so UI edits cannot race them or silently violate fail-closed queue ownership.
+1. **Now Playing favourite heart:** show whether the current canonical TIDAL track is in the user's collection and allow add/remove only after a read-only membership path and official mutation contract are proven. Never assume the currently playing HEOS MID is always the canonical official TIDAL ID: personalised/replacement cases such as The Sugarcubes — Birthday prove those identities can differ. Recon must be read-only and must never add/remove a real favourite. If mutation is later accepted, refresh/invalidate the relevant Favourite Tracks cache only after confirmed success.
 
-2. **Now Playing favourite heart:** show whether the current canonical TIDAL track is in the user's collection and allow add/remove only after a read-only membership path and official mutation contract are proven. Never assume the currently playing HEOS MID is always the canonical official TIDAL ID: personalised/replacement cases such as The Sugarcubes — Birthday prove those identities can differ. Recon must be read-only and must never add/remove a real favourite. If mutation is later accepted, refresh/invalidate the relevant Favourite Tracks cache only after confirmed success.
+2. **TIDAL landing/home artwork:** generic browse rows currently create an artwork slot even when the item has no image, producing blank boxes. For the TIDAL landing/category screen, either remove the empty artwork slot for those categories or deliberately supply appropriate imagery. Do not fabricate remote artwork URLs or regress working navigation.
 
-3. **TIDAL landing/home artwork:** generic browse rows currently create an artwork slot even when the item has no image, producing blank boxes. For the TIDAL landing/category screen, either remove the empty artwork slot for those categories or deliberately supply appropriate imagery. Do not fabricate remote artwork URLs or regress working navigation.
-
-4. **Richer artist page:** current HEOS-backed artist drill-in categories can likewise show blank generic artwork slots. Preserve those tested HEOS drill-ins/playback, but enrich the page with an official-TIDAL artist hero image and biography/description only if the developer API actually exposes supported fields/relationships. Research/probe read-only first; do not guess API shapes. Aim for a Roon/TIDAL-style header while keeping the existing Tracks/Albums/EPs/Other Albums/Similar routes working.
+3. **Richer artist page:** current HEOS-backed artist drill-in categories can likewise show blank generic artwork slots. Preserve those tested HEOS drill-ins/playback, but enrich the page with an official-TIDAL artist hero image and biography/description only if the developer API actually exposes supported fields/relationships. Research/probe read-only first; do not guess API shapes. Aim for a Roon/TIDAL-style header while keeping the existing Tracks/Albums/EPs/Other Albums/Similar routes working.
 
 ## Proactive architecture roadmap
 
@@ -37,7 +47,7 @@ The HP is deliberately an extensible local brain. `marantz-ai.service` (persiste
 
 Maintain the safety boundary: AI may interpret language/context, assist discovery and explain diagnostics; deterministic/fail-closed code remains authoritative for TIDAL-to-HEOS identity, AVR control and playback/queue mutation.
 
-Active future opportunities to preserve across handovers are: a lightweight SQLite event/playback/command/resolver history store; a unified read-only system health/diagnostic snapshot; a Current Queue view/control surface (read-only first, with current/upcoming tracks and available artwork/metadata, then optional play/remove/reorder/clear controls later); richer contextual voice follow-ups; AI-assisted diagnosis from structured evidence; discovery across TIDAL metadata, Discogs-derived collection data and playback history; and, only when justified by a concrete retrieval need, lightweight local embeddings/semantic search. These are roadmap items, not yet implemented features.
+Active future opportunities to preserve across handovers are: a lightweight SQLite event/playback/command/resolver history store; a unified read-only system health/diagnostic snapshot; optional Current Queue mutation controls only if the user later wants them and only after separate queue-owner safety work; richer contextual voice follow-ups; AI-assisted diagnosis from structured evidence; discovery across TIDAL metadata, Discogs-derived collection data and playback history; and, only when justified by a concrete retrieval need, lightweight local embeddings/semantic search. These are roadmap items, not yet implemented features.
 
 The architecture is **official TIDAL API for what the user sees; HEOS for what the user hears**. Official TIDAL supplies personalised recommendations, canonical track/artist/album metadata, descriptions and artwork. HEOS/SR8015 remains playback transport. Existing HEOS browse/search routes remain available as fallback/diagnostic paths, but new catalogue UI should not regress to HEOS browsing when official metadata is available.
 
@@ -125,7 +135,7 @@ Detailed microphone/ASR notes are maintained in the `marantz-voice` README and C
 
 Backend pre-handover cleaned/pushed checkpoint: `b83b443 — Remove official TIDAL catalogue README updater`. The preceding permanent documentation checkpoint is `d3c247b — Document completed official TIDAL catalogue migration`.
 
-Pi final documentation-cleaned/pushed head: `649b272 — Remove handover documentation updater`; latest tested production cleanup before documentation-only commits: `1758311 — Remove TIDAL swipe return migration helper`. Latest tested production UI checkpoints are `36bd317 — Restore TIDAL browse with Now Playing swipe` and `84170a5 — Sort TIDAL Artists alphabetically`.
+Pi current tested/pushed production head before this documentation update: `1796f6c — Add read-only Current Queue UI`; its paired API checkpoint is `41e8ab0 — Add read-only Current Queue API`. Earlier tested UI checkpoints remain `36bd317 — Restore TIDAL browse with Now Playing swipe` and `84170a5 — Sort TIDAL Artists alphabetically`.
 
 Ordinary Playlists remain production-checkpointed at backend `43902d1` / cleanup `0f6bf7b`, and Pi `d2f96e4` / cleanup `1e810ed`. Earlier Artists/Albums checkpoints remain `2ba75d0` backend production / `f4e1476` cleanup and `998589b` Pi production / `497e6a5` cleanup. Favourite Tracks rolling production remains `4d6da8c`, with ordinary-action fix `08a86ce`.
 
