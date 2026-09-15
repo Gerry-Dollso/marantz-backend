@@ -2013,20 +2013,14 @@ const server = http.createServer(async (req, res) => {
       const idempotencyKey = require('crypto').randomUUID();
       const mutation = await tidalUserAuthRecon.mutateFavouriteTrack(officialId, favourite, idempotencyKey);
       invalidateFavouriteTracksPlaybackValidation();
-      const refreshed = await tidalUserAuthRecon.getFavouriteTracks({ forceRefresh: true });
-      const tracks = Array.isArray(refreshed.tracks) ? refreshed.tracks : [];
-      const confirmed = tracks.some(track => String(track?.id || '') === officialId);
-      if (confirmed !== favourite) {
-        return sendJson(res, 502, { ok: false, id: officialId, favourite: confirmed, error: 'TIDAL collection mutation was not confirmed by the subsequent official collection read' });
-      }
 
       return sendJson(res, 200, {
         ok: true,
         id: officialId,
-        favourite: confirmed,
+        favourite,
         operation: favourite ? 'add' : 'remove',
         tidalHttpStatus: mutation.httpStatus,
-        collectionRefreshed: true
+        collectionInvalidated: true
       });
     } catch (error) {
       const message = String(error?.message || error);
