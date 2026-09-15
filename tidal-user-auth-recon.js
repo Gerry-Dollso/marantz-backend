@@ -7,7 +7,7 @@ const AUTHORIZE_URL = 'https://login.tidal.com/authorize';
 const TOKEN_URL = 'https://auth.tidal.com/v1/oauth2/token';
 const API_BASE = 'https://openapi.tidal.com/v2';
 const DEFAULT_REDIRECT_URI = 'http://192.168.50.145:3100/api/tidal/oauth/callback';
-const DEFAULT_SCOPES = ['recommendations.read', 'user.read', 'collection.read', 'search.read'];
+const DEFAULT_SCOPES = ['recommendations.read', 'user.read', 'collection.read', 'collection.write', 'search.read'];
 const PENDING_AUTH_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_REFRESH_TOKEN_FILE = '/etc/marantz-backend/tidal-refresh-token'; // TIDAL_PERSISTENT_REFRESH_AUTH_V1
 
