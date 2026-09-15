@@ -56,6 +56,10 @@ let tidalVoiceSearchSequence = 0;
 let tidalQueueGeneration = 0;
 let tidalFavouriteQueueCommand = null;
 let favouriteTracksValidationCache = null;
+
+function invalidateFavouriteTracksPlaybackValidation() {
+  favouriteTracksValidationCache = null;
+}
 let favouriteTracksValidationRefresh = null;
 let favouriteTracksRollingSession = null;
 let favouriteTracksRollingReconcileTimer = null;
@@ -1958,8 +1962,8 @@ const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://localhost');
       const id = String(url.searchParams.get('id') || '').trim();
-      if (!/^\d+$/.test(id)) {
-        return sendJson(res, 400, { ok: false, readOnly: true, error: 'Track id must contain digits only' });
+      if (!id || id.length > 256) {
+        return sendJson(res, 400, { ok: false, readOnly: true, error: 'Track id is required and must be at most 256 characters' });
       }
 
       const metadata = await tidalUserAuthRecon.getTrackMetadata(id);
@@ -1988,6 +1992,46 @@ const server = http.createServer(async (req, res) => {
       const message = String(error?.message || error);
       const statusCode = /^404:/.test(message) ? 404 : 502;
       return sendJson(res, statusCode, { ok: false, readOnly: true, error: message });
+    }
+  }
+
+  if ((req.method === 'POST' || req.method === 'DELETE') && req.url.startsWith('/api/tidal/favourite-track?')) {
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      const id = String(url.searchParams.get('id') || '').trim();
+      if (!id || id.length > 256) {
+        return sendJson(res, 400, { ok: false, error: 'Track id is required and must be at most 256 characters' });
+      }
+
+      const metadata = await tidalUserAuthRecon.getTrackMetadata(id);
+      const officialId = String(metadata?.data?.id || '');
+      if (officialId !== id || metadata?.data?.type !== 'tracks') {
+        return sendJson(res, 409, { ok: false, error: 'Track id did not resolve to the same official TIDAL track id' });
+      }
+
+      const favourite = req.method === 'POST';
+      const idempotencyKey = require('crypto').randomUUID();
+      const mutation = await tidalUserAuthRecon.mutateFavouriteTrack(officialId, favourite, idempotencyKey);
+      invalidateFavouriteTracksPlaybackValidation();
+      const refreshed = await tidalUserAuthRecon.getFavouriteTracks({ forceRefresh: true });
+      const tracks = Array.isArray(refreshed.tracks) ? refreshed.tracks : [];
+      const confirmed = tracks.some(track => String(track?.id || '') === officialId);
+      if (confirmed !== favourite) {
+        return sendJson(res, 502, { ok: false, id: officialId, favourite: confirmed, error: 'TIDAL collection mutation was not confirmed by the subsequent official collection read' });
+      }
+
+      return sendJson(res, 200, {
+        ok: true,
+        id: officialId,
+        favourite: confirmed,
+        operation: favourite ? 'add' : 'remove',
+        tidalHttpStatus: mutation.httpStatus,
+        collectionRefreshed: true
+      });
+    } catch (error) {
+      const message = String(error?.message || error);
+      const statusCode = /^404:/.test(message) ? 404 : /^4\d\d:/.test(message) ? 400 : 502;
+      return sendJson(res, statusCode, { ok: false, error: message });
     }
   }
 

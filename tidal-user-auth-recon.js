@@ -110,7 +110,9 @@ function createTidalUserAuthRecon(options = {}) {
   const personalisedPlaylistCache = new Map();
   const personalisedArtworkCache = new Map();
   const favouriteTracksCache = { value: null, expiresAt: 0 };
+  let favouriteTracksCacheGeneration = 0;
   let favouriteTracksRefreshInFlight = null;
+  let favouriteTracksRefreshGeneration = null;
   const favouriteArtistsCache = { value: null, expiresAt: 0 };
   const favouriteAlbumsCache = { value: null, expiresAt: 0 };
   let favouriteArtistsRefreshInFlight = null;
@@ -275,6 +277,43 @@ function createTidalUserAuthRecon(options = {}) {
       httpStatus: response.status,
       ...summarisePayload(payload)
     };
+  }
+
+  async function mutateFavouriteTrack(trackId, favourite, idempotencyKey) {
+    const id = String(trackId || '').trim();
+    const key = String(idempotencyKey || '').trim();
+    if (!id || id.length > 256) throw new Error('Track id is required and must be at most 256 characters');
+    if (!key || key.length > 256) throw new Error('Idempotency-Key is required and must be at most 256 characters');
+    if (typeof favourite !== 'boolean') throw new Error('Favourite state must be boolean');
+
+    await ensureSession();
+    const response = await fetch(
+      API_BASE + '/userCollectionTracks/me/relationships/items',
+      {
+        method: favourite ? 'POST' : 'DELETE',
+        headers: {
+          Authorization: 'Bearer ' + session.accessToken,
+          Accept: 'application/vnd.api+json',
+          'Content-Type': 'application/vnd.api+json',
+          'Idempotency-Key': key
+        },
+        body: JSON.stringify({ data: [{ id, type: 'tracks' }] })
+      }
+    );
+    const text = await response.text();
+    let payload = {};
+    if (text) {
+      try { payload = JSON.parse(text); } catch { payload = { raw: text }; }
+    }
+    if (!response.ok) {
+      const detail = payload?.errors?.[0]?.detail || payload?.detail || ('HTTP ' + response.status);
+      throw new Error(response.status + ': ' + detail);
+    }
+
+    favouriteTracksCacheGeneration += 1;
+    favouriteTracksCache.value = null;
+    favouriteTracksCache.expiresAt = 0;
+    return { httpStatus: response.status, payload };
   }
 
   async function apiGetRaw(path) {
@@ -814,8 +853,14 @@ function createTidalUserAuthRecon(options = {}) {
   }
 
   async function refreshFavouriteTracks() {
-    if (favouriteTracksRefreshInFlight) return favouriteTracksRefreshInFlight;
+    const generation = favouriteTracksCacheGeneration;
+    if (favouriteTracksRefreshInFlight) {
+      if (favouriteTracksRefreshGeneration === generation) return favouriteTracksRefreshInFlight;
+      try { await favouriteTracksRefreshInFlight; } catch {}
+      return refreshFavouriteTracks();
+    }
 
+    favouriteTracksRefreshGeneration = generation;
     favouriteTracksRefreshInFlight = (async () => {
       const startedAt = Date.now();
       const relationship = await getFavouriteTrackReferenceIds();
@@ -865,8 +910,10 @@ function createTidalUserAuthRecon(options = {}) {
         refreshedAt: new Date(refreshedAt).toISOString()
       };
 
-      favouriteTracksCache.value = value;
-      favouriteTracksCache.expiresAt = refreshedAt + FAVOURITE_TRACKS_TTL_MS;
+      if (generation === favouriteTracksCacheGeneration) {
+        favouriteTracksCache.value = value;
+        favouriteTracksCache.expiresAt = refreshedAt + FAVOURITE_TRACKS_TTL_MS;
+      }
       return value;
     })();
 
@@ -874,6 +921,7 @@ function createTidalUserAuthRecon(options = {}) {
       return await favouriteTracksRefreshInFlight;
     } finally {
       favouriteTracksRefreshInFlight = null;
+      favouriteTracksRefreshGeneration = null;
     }
   }
 
@@ -1989,6 +2037,7 @@ async function probeSearch() {
   return {
     handle,
     getTrackMetadata: probeTrackMetadata,
+    mutateFavouriteTrack,
     getPersonalisedPlaylist,
     getFavouriteTracks,
     getFavouriteArtists,
