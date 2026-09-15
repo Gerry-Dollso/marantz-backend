@@ -31,15 +31,21 @@ HEOS queue rows already provide artwork, title, artist, album, qid, mid and albu
 
 Queue viewing and queue mutation remain separate stages. No play-selected, remove, reorder, sort or clear controls were added. The user is currently satisfied with viewing and does not consider editing a priority. If mutation is revisited later, separately prove its interaction with ordinary HEOS playback, Favourite Tracks rolling playback and personalised/background queue builders; do not complicate or regress the accepted read-only viewer.
 
+## Now Playing TIDAL favourite heart — production accepted 15 Sep 2026
+
+Task 2 is complete. The Pi production checkpoint is `4e7743e`; backend production is pushed through `6c7e2fe`. The heart uses official TIDAL collection membership/writes only. Preserve known official `tidalTrackId` across our own TIDAL playback launch; otherwise treat HEOS `tidalMid` only as a candidate and require exact official metadata validation. Never use HEOS to reconcile favourite membership.
+
+The write path no longer waits for the ~35 s canonical Favourite Tracks rebuild. Successful official mutation invalidates the canonical cache and records a two-minute single-track recent-mutation overlay. Status validates the official track first, then may answer from that overlay; expired entries fall through to the canonical collection. Full Favourite Tracks endpoints and rolling playback remain canonical and are not patched by the overlay. Controlled Aquarius add/remove tests passed at ~0.3 s writes and ~0.2 s immediate status checks, and Aquarius was restored to not-favourite.
+
+Pi UI acceptance: heart is in the Now Playing progress area at right, `bottom:48px`; one SVG geometry is used for both states; non-favourite is grey outline `rgba(255,255,255,0.45)`; favourite is solid/stroked `#ff3b3b`. Heart sync is driven by the existing `render(data)` status cycle with no second `/api/status` poller.
+
 ## Immediate next-chat work — agreed order
 
-Current Queue is complete. Continue in this order, using GitHub for repository inspection and Termius only for runtime evidence/deployment checks that GitHub cannot provide. Do not begin production changes before the relevant read-only contract is understood.
+Current Queue and the Now Playing favourite heart are complete. Resume with **Task 3** next; do not reopen either completed task without new evidence. Use GitHub for repository inspection and Termius only for runtime evidence/deployment checks that GitHub cannot provide.
 
-1. **Now Playing favourite heart:** show whether the current canonical TIDAL track is in the user's collection and allow add/remove only after a read-only membership path and official mutation contract are proven. Never assume the currently playing HEOS MID is always the canonical official TIDAL ID: personalised/replacement cases such as The Sugarcubes — Birthday prove those identities can differ. Recon must be read-only and must never add/remove a real favourite. If mutation is later accepted, refresh/invalidate the relevant Favourite Tracks cache only after confirmed success.
+1. **TIDAL landing/home artwork:** generic browse rows currently create an artwork slot even when the item has no image, producing blank boxes. For the TIDAL landing/category screen, either remove the empty artwork slot for those categories or deliberately supply appropriate imagery. Do not fabricate remote artwork URLs or regress working navigation.
 
-2. **TIDAL landing/home artwork:** generic browse rows currently create an artwork slot even when the item has no image, producing blank boxes. For the TIDAL landing/category screen, either remove the empty artwork slot for those categories or deliberately supply appropriate imagery. Do not fabricate remote artwork URLs or regress working navigation.
-
-3. **Richer artist page:** current HEOS-backed artist drill-in categories can likewise show blank generic artwork slots. Preserve those tested HEOS drill-ins/playback, but enrich the page with an official-TIDAL artist hero image and biography/description only if the developer API actually exposes supported fields/relationships. Research/probe read-only first; do not guess API shapes. Aim for a Roon/TIDAL-style header while keeping the existing Tracks/Albums/EPs/Other Albums/Similar routes working.
+2. **Richer artist page:** current HEOS-backed artist drill-in categories can likewise show blank generic artwork slots. Preserve those tested HEOS drill-ins/playback, but enrich the page with an official-TIDAL artist hero image and biography/description only if the developer API actually exposes supported fields/relationships. Research/probe read-only first; do not guess API shapes. Aim for a Roon/TIDAL-style header while keeping the existing Tracks/Albums/EPs/Other Albums/Similar routes working.
 
 ## Proactive architecture roadmap
 
