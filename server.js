@@ -56,6 +56,7 @@ let tidalVoiceSearchSequence = 0;
 let tidalQueueGeneration = 0;
 let tidalFavouriteQueueCommand = null;
 let favouriteTracksValidationCache = null;
+const recentFavouriteTrackMutations = new Map();
 
 function invalidateFavouriteTracksPlaybackValidation() {
   favouriteTracksValidationCache = null;
@@ -1976,6 +1977,16 @@ const server = http.createServer(async (req, res) => {
         });
       }
 
+      if (recentFavouriteTrackMutations.has(officialId)) {
+        return sendJson(res, 200, {
+          ok: true,
+          readOnly: true,
+          id: officialId,
+          favourite: recentFavouriteTrackMutations.get(officialId),
+          recentMutation: true
+        });
+      }
+
       const official = await tidalUserAuthRecon.getFavouriteTracks();
       const tracks = Array.isArray(official.tracks) ? official.tracks : [];
       const favourite = tracks.some(track => String(track?.id || '') === officialId);
@@ -2013,6 +2024,7 @@ const server = http.createServer(async (req, res) => {
       const idempotencyKey = require('crypto').randomUUID();
       const mutation = await tidalUserAuthRecon.mutateFavouriteTrack(officialId, favourite, idempotencyKey);
       invalidateFavouriteTracksPlaybackValidation();
+      recentFavouriteTrackMutations.set(officialId, favourite);
 
       return sendJson(res, 200, {
         ok: true,
