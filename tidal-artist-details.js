@@ -8,8 +8,12 @@ const TOP_TRACK_LIMIT = 10;
 
 function createTidalArtistDetails(options = {}) {
   const apiGet = options.apiGet;
+  const getAlbumMetadata = options.getAlbumMetadata;
+  const heosBrowse = options.heosBrowse;
   const countryCode = String(options.countryCode || 'GB').trim() || 'GB';
   if (typeof apiGet !== 'function') throw new Error('apiGet is required');
+  if (typeof getAlbumMetadata !== 'function') throw new Error('getAlbumMetadata is required');
+  if (typeof heosBrowse !== 'function') throw new Error('heosBrowse is required');
   const biographyResolver = options.biographyResolver || createArtistBiography();
 
   const cache = new Map();
@@ -71,6 +75,25 @@ function createTidalArtistDetails(options = {}) {
     };
   }
 
+  async function heosArtistCategory(artistId, category) {
+    const cid = `LIBARTIST-${category}-${artistId}`;
+    const rows = [];
+    let start = 0;
+    let total = null;
+    while (total === null || start < total) {
+      const encodedCid = encodeURIComponent(cid).replace(/%20/g, ' ');
+      const response = await heosBrowse(`heos://browse/browse?sid=10&cid=${encodedCid}&range=${start},${start + 49}`);
+      const payload = Array.isArray(response.payload) ? response.payload : [];
+      rows.push(...payload);
+      const match = String(response.heos?.message || '').match(/(?:^|&)count=(\d+)/);
+      if (match) total = Number(match[1]);
+      if (payload.length === 0) break;
+      start += payload.length;
+      if (total === null && payload.length < 50) break;
+    }
+    return { cid, total, rows };
+  }
+
   async function relationship(artistId, name, include, extra = '') {
     return apiGet('/artists/' + encodeURIComponent(artistId) + '/relationships/' + encodeURIComponent(name) + '?' + extra +
       'include=' + encodeURIComponent(include) + '&countryCode=' + encodeURIComponent(countryCode));
@@ -97,11 +120,29 @@ function createTidalArtistDetails(options = {}) {
     return Array.from(byId.values()).sort((a, b) => b.popularity - a.popularity || a.title.localeCompare(b.title)).slice(0, TOP_TRACK_LIMIT);
   }
 
+  async function enrichHeosAlbums(groups) {
+    const ids = [];
+    for (const rows of groups) for (const row of rows) {
+      const match = String(row?.cid || '').match(/^LIBALBUM-(\d+)$/);
+      if (match) ids.push(match[1]);
+    }
+    const metadata = await getAlbumMetadata(ids);
+    const byId = new Map(metadata.map(item => [String(item.id), item]));
+    return groups.map(rows => rows.map(row => {
+      const match = String(row?.cid || '').match(/^LIBALBUM-(\d+)$/);
+      const item = match ? byId.get(match[1]) : null;
+      if (item === undefined || item === null) return row;
+      return { ...row, albumId: item.id, name: item.title || row.name, title: item.title || row.title || row.name, artist: item.artist || row.artist, artistId: item.artistId, releaseDate: item.releaseDate, explicit: item.explicit, numberOfItems: item.numberOfItems, mediaTags: item.mediaTags, imageUrl: item.artwork || row.imageUrl };
+    }));
+  }
+
   async function load(artistId) {
     const pause = () => new Promise(resolve => setTimeout(resolve, 250));
     const artistPayload = await apiGet('/artists/' + encodeURIComponent(artistId) + '?include=profileArt&countryCode=' + encodeURIComponent(countryCode));
     await pause();
-    const albumsPayload = await relationship(artistId, 'albums', 'albums.coverArt,albums.artists');
+    const albumsHeos = await heosArtistCategory(artistId, 'Albums');
+    const singlesHeos = await heosArtistCategory(artistId, 'EP n Singles');
+    const appearsOnHeos = await heosArtistCategory(artistId, 'Other Albums');
     await pause();
     const radioPayload = await relationship(artistId, 'radio', 'radio,radio.coverArt,radio.items');
     await pause();
@@ -112,10 +153,7 @@ function createTidalArtistDetails(options = {}) {
     const artistArt = artworkMap(artistPayload);
     const artistResource = Array.isArray(artistPayload?.data) ? artistPayload.data[0] : artistPayload?.data;
     const artist = mapArtist(artistResource, artistArt);
-    const albumArt = artworkMap(albumsPayload);
-    const releases = resources(albumsPayload, 'albums').map(item => mapAlbum(item, albumArt));
-    const albums = releases.filter(item => item.albumType === 'ALBUM');
-    const singles = releases.filter(item => item.albumType === 'SINGLE');
+    const [albums, singles, appearsOn] = await enrichHeosAlbums([albumsHeos.rows, singlesHeos.rows, appearsOnHeos.rows]);
     const similarArt = artworkMap(similarPayload);
     const similarArtists = resources(similarPayload, 'artists').map(item => mapArtist(item, similarArt));
     const radioResource = resources(radioPayload, 'playlists')[0] || null;
@@ -124,10 +162,10 @@ function createTidalArtistDetails(options = {}) {
     const biography = await biographyResolver.getBiography({
       artistId: artist.id,
       name: artist.name,
-      albumTitles: releases.map(item => item.title).filter(Boolean)
+      albumTitles: [...albums, ...singles, ...appearsOn].map(item => item.name || item.title).filter(Boolean)
     });
 
-    return { artist, topTracks, albums, singles, radio, similarArtists, biography, appearsOn: [], source: 'TIDAL public API' };
+    return { artist, topTracks, albums, singles, radio, similarArtists, biography, appearsOn, source: 'TIDAL + HEOS hybrid' };
   }
 
   async function getArtistDetails(artistId, options = {}) {

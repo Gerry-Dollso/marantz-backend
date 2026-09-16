@@ -2023,6 +2023,16 @@ async function probeSearch() {
     return false;
   }
 
+  async function getAlbumMetadata(ids) {
+    const uniqueIds = [...new Set((ids || []).map(id => String(id).trim()).filter(id => /^\d+$/.test(id)))];
+    const values = [];
+    for (let i = 0; i < uniqueIds.length; i += FAVOURITE_TRACKS_BATCH_SIZE) {
+      if (i > 0) await new Promise(resolve => setTimeout(resolve, FAVOURITE_TRACKS_METADATA_BATCH_DELAY_MS));
+      values.push(...await getLibraryMetadataBatch('albums', uniqueIds.slice(i, i + FAVOURITE_TRACKS_BATCH_SIZE), Math.floor(i / FAVOURITE_TRACKS_BATCH_SIZE) + 1));
+    }
+    return values;
+  }
+
   return {
     handle,
     authenticatedApiGet: apiGetRaw,
@@ -2032,6 +2042,7 @@ async function probeSearch() {
     getFavouriteTracks,
     getFavouriteArtists,
     getFavouriteAlbums,
+    getAlbumMetadata,
     getFavouritePlaylistReferenceIds,
     getPlaylistMetadata,
     getCollectionReferenceIds

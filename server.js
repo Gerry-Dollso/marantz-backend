@@ -45,6 +45,8 @@ const tidalUserAuthRecon = createTidalUserAuthRecon({
 });
 const tidalArtistDetails = createTidalArtistDetails({
   apiGet: tidalUserAuthRecon.authenticatedApiGet,
+  getAlbumMetadata: tidalUserAuthRecon.getAlbumMetadata,
+  heosBrowse,
   countryCode: 'GB'
 });
 const tidalHeosResolver = createTidalHeosResolver({
