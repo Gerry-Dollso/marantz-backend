@@ -2,6 +2,7 @@
 
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MUSICBRAINZ_GAP_MS = 1100;
+const TRANSIENT_RETRIES = 2;
 const USER_AGENT = 'MarantzPi/1.0 (personal music display)';
 
 function createArtistBiography(options = {}) {
@@ -15,10 +16,29 @@ function createArtistBiography(options = {}) {
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const normalise = value => String(value || '').trim().toLowerCase();
 
+  function transientStatus(status) {
+    return status === 429 || status >= 500;
+  }
+
   async function fetchJson(url, headers = {}) {
-    const response = await fetchImpl(url, { headers: { Accept: 'application/json', ...headers } });
-    if (!response.ok) throw new Error('HTTP ' + response.status + ' from ' + new URL(url).hostname);
-    return response.json();
+    let lastError;
+    for (let attempt = 0; attempt <= TRANSIENT_RETRIES; attempt += 1) {
+      try {
+        const response = await fetchImpl(url, { headers: { Accept: 'application/json', ...headers } });
+        if (response.ok) return response.json();
+        const error = new Error('HTTP ' + response.status + ' from ' + new URL(url).hostname);
+        error.transient = transientStatus(response.status);
+        if (!error.transient || attempt === TRANSIENT_RETRIES) throw error;
+        lastError = error;
+      } catch (error) {
+        if (error.transient === false) throw error;
+        error.transient = true;
+        lastError = error;
+        if (attempt === TRANSIENT_RETRIES) throw error;
+      }
+      await sleep(750 * (attempt + 1));
+    }
+    throw lastError;
   }
 
   async function musicBrainzJson(url) {
