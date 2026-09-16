@@ -1,5 +1,19 @@
 # Current handover — 15 Sep 2026
 
+<!-- TASK3_TIDAL_LANDING_MIXES_2026_09_16 -->
+## 2026-09-16 — TIDAL landing / Mixes & Radio accepted
+
+Task 3 of the post-catalogue UI/control phase is production-accepted. The Pi TIDAL landing page now has six local line-icon shortcuts: Playlists, Artists, Albums, Tracks, Mixes & Radio and Genres. Genres restores the existing HEOS/TIDAL genre browse surface and live testing returned artwork correctly. Videos were deliberately omitted.
+
+Mixes & Radio is no longer built from the incomplete recommendations endpoints. The backend walks the official TIDAL saved playlist collection, bulk-loads playlist metadata, preserves relationship order and selects resources with `playlistType === "MIX"`. This is the canonical discriminator: do not use names, hard-coded IDs, HEOS subtraction or the old recommendation list. The 2026-09-16 acceptance snapshot was 53 saved playlist references and 19 MIX resources with zero unresolved metadata IDs; counts are snapshots, not constants. The collection naturally included My New Arrivals, Artist Radio, Track Radio, history/listening mixes, My Most Listened and My Mix 1–8.
+
+The backend returns official TIDAL playlist artwork directly and the Pi renders that artwork without the old per-MIX enrichment requests. Existing official playlist-detail and TIDAL-to-HEOS resolver paths remain the playback mechanism. Touchscreen acceptance passed TRICKY Artist Radio browse, Turnip Farm Track Radio browse/playback, My Mix 8 playback and Genres artwork.
+
+Canonical checkpoints: backend production `d075c78`, backend cleanup `5da1641`, backend documentation head before this roll-up `4ad1725`; companion Pi production `e98c1e1`, cleanup `d94b55d`, documentation `2530d9c`. Detailed record: `docs/TIDAL_MIXES_RADIO_2026-09-16.md`.
+
+Current Queue, Now Playing favourite heart and TIDAL landing/Mixes & Radio are complete. **Next active task: richer Artist Page.** Now Playing Track Radio was discussed and deliberately left as a later task.
+
+
 This is the authoritative short handover for current MarantzPi / HP backend TIDAL work. Do not restart the closed Birthday/replacement reconnaissance unless a later code change specifically invalidates the evidence below.
 
 ## Current direction
