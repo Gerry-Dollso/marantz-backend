@@ -81,6 +81,6 @@ Live acceptance tests on 2026-09-16 proved:
 
 ## Accepted production checkpoint
 
-Backend production implementation commit: `853f62d` — `Use saved TIDAL MIX collection for Mixes and Radio`.
+Backend production implementation commit: `d075c78` — `Use saved TIDAL MIX collection for Mixes and Radio`.
 
-Temporary upgrade helper was removed in `d198dac`.
+Temporary upgrade helper was removed in `5da1641`.
