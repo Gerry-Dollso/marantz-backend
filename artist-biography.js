@@ -3,6 +3,7 @@
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MUSICBRAINZ_GAP_MS = 1100;
 const TRANSIENT_RETRIES = 2;
+const TEASER_MAX_CHARS = 180;
 const USER_AGENT = 'MarantzPi/1.0 (personal music display)';
 
 function createArtistBiography(options = {}) {
@@ -15,6 +16,14 @@ function createArtistBiography(options = {}) {
 
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const normalise = value => String(value || '').trim().toLowerCase();
+
+  function teaser(text) {
+    const clean = String(text || '').replace(/\s+/g, ' ').trim();
+    if (clean.length <= TEASER_MAX_CHARS) return clean;
+    const cut = clean.slice(0, TEASER_MAX_CHARS + 1);
+    const boundary = cut.lastIndexOf(' ');
+    return (boundary > 0 ? cut.slice(0, boundary) : clean.slice(0, TEASER_MAX_CHARS)).trimEnd() + '…';
+  }
 
   function transientStatus(status) {
     return status === 429 || status >= 500;
@@ -93,11 +102,11 @@ function createArtistBiography(options = {}) {
     const summary = await fetchJson('https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(title), {
       'User-Agent': USER_AGENT
     });
-    const text = String(summary?.extract || '').trim();
+    const text = String(summary?.extract || '').replace(/\s+/g, ' ').trim();
     if (!text) return null;
     return {
       text,
-      teaser: text,
+      teaser: teaser(text),
       source: 'Wikipedia',
       sourceUrl: String(summary?.content_urls?.desktop?.page || ''),
       musicBrainzId: mbid,
