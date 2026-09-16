@@ -17,6 +17,7 @@ const {
 const {
   createTidalUserAuthRecon
 } = require('./tidal-user-auth-recon');
+const { createTidalArtistDetails } = require('./tidal-artist-details');
 const {
   createTidalMetadataClient
 } = require('./tidal-metadata-client');
@@ -40,6 +41,10 @@ const tidalMetadata = createTidalMetadataClient({ countryCode: 'GB' });
 const tidalBrowseCache = createTidalBrowseCache({ maxEntries: 64 });
 
 const tidalUserAuthRecon = createTidalUserAuthRecon({
+  countryCode: 'GB'
+});
+const tidalArtistDetails = createTidalArtistDetails({
+  apiGet: tidalUserAuthRecon.authenticatedApiGet,
   countryCode: 'GB'
 });
 const tidalHeosResolver = createTidalHeosResolver({
@@ -2168,6 +2173,19 @@ const server = http.createServer(async (req, res) => {
       });
     } catch (error) {
       return sendJson(res, 500, { error: error.message });
+    }
+  }
+
+  if (req.method === 'GET' && req.url.startsWith('/api/tidal/artist-details?')) {
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      const artistId = url.searchParams.get('id') || '';
+      const details = await tidalArtistDetails.getArtistDetails(artistId, {
+        forceRefresh: url.searchParams.get('refresh') === '1'
+      });
+      return sendJson(res, 200, { ok: true, ...details });
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: error.message });
     }
   }
 

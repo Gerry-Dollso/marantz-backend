@@ -2025,6 +2025,7 @@ async function probeSearch() {
 
   return {
     handle,
+    authenticatedApiGet: apiGetRaw,
     getTrackMetadata: probeTrackMetadata,
     mutateFavouriteTrack,
     getPersonalisedPlaylist,
