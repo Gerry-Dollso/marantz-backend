@@ -493,40 +493,29 @@ function createTidalUserAuthRecon(options = {}) {
       return { ...personalisedRecommendationsCache.value, cached: true };
     }
 
-    const raw = await probeRawRecommendations();
-    const playlists = [];
-    const seen = new Set();
+    // TIDAL's saved playlist collection is the canonical source for the
+    // Mixes & Radio shelf. Artist Radio, Track Radio, History mixes, My Mixes
+    // and My New Arrivals are all playlist resources with playlistType MIX.
+    const relationship = await getFavouritePlaylistReferenceIds();
+    const metadata = await getPlaylistMetadata(relationship.ids);
+    const playlists = metadata.items
+      .filter(item => item.playlistType === 'MIX')
+      .map(item => ({
+        id: item.id,
+        name: item.name,
+        kind: 'mix',
+        description: '',
+        artwork: item.artwork || null
+      }));
 
-    const add = (kind, resource) => {
-      if (!resource || resource.type !== 'playlists' || !resource.id) return;
-      const id = String(resource.id);
-      if (seen.has(id)) return;
-      seen.add(id);
-      playlists.push({
-        id,
-        name: playlistName(resource),
-        kind,
-        description: String(resource.attributes?.description || '').trim()
-      });
+    const value = {
+      playlists,
+      referenceCount: relationship.ids.length,
+      mixCount: playlists.length,
+      relationshipPages: relationship.pages,
+      metadataBatches: metadata.metadataBatches,
+      unresolvedIds: metadata.unresolvedIds
     };
-
-    const dailyMixResources = (raw.dailyMixes?.included || [])
-      .filter(resource => resource?.type === 'playlists');
-    dailyMixResources.sort((a, b) => {
-      const an = Number((playlistName(a).match(/My Mix (\d+)/i) || [])[1]) || 999;
-      const bn = Number((playlistName(b).match(/My Mix (\d+)/i) || [])[1]) || 999;
-      return an - bn;
-    });
-    for (const resource of dailyMixResources) add('mix', resource);
-
-    for (const resource of raw.dailyDiscovery?.included || []) {
-      if (resource?.type === 'playlists') add('daily-discovery', resource);
-    }
-    for (const resource of raw.newArrivals?.included || []) {
-      if (resource?.type === 'playlists') add('new-arrivals', resource);
-    }
-
-    const value = { playlists };
     personalisedRecommendationsCache.value = value;
     personalisedRecommendationsCache.expiresAt = Date.now() + PERSONALISED_RECOMMENDATIONS_TTL_MS;
     return { ...value, cached: false };
