@@ -2,6 +2,7 @@
 
 const { createArtistBiography } = require('./artist-biography');
 const { createTidalArtistDetailsStore } = require('./tidal-artist-details-store');
+const { createTidalArtistTopTracksStore } = require('./tidal-artist-top-tracks-store');
 
 const ARTIST_DETAILS_TTL_MS = 15 * 60 * 1000;
 const MAX_TRACK_PAGES = 50;
@@ -18,9 +19,12 @@ function createTidalArtistDetails(options = {}) {
   if (typeof heosBrowse !== 'function') throw new Error('heosBrowse is required');
   const biographyResolver = options.biographyResolver || createArtistBiography();
   const persistentStore = options.persistentStore || createTidalArtistDetailsStore(options.persistentStoreOptions);
+  const topTracksStore = options.topTracksStore || createTidalArtistTopTracksStore(options.topTracksStoreOptions);
 
   const cache = new Map();
   const inFlight = new Map();
+  const topTracksCache = new Map();
+  const topTracksInFlight = new Map();
 
   function resources(payload, type) {
     return (Array.isArray(payload?.included) ? payload.included : []).filter(item => item && item.type === type);
@@ -166,9 +170,6 @@ function createTidalArtistDetails(options = {}) {
     await pause();
     const similarPayload = await relationship(artistId, 'similarArtists', 'similarArtists.profileArt');
     mark('similarArtistsMs');
-    await pause();
-    const topTracks = await getAllTracks(artistId);
-    mark('topTracksMs');
 
     const artistArt = artworkMap(artistPayload);
     const artistResource = Array.isArray(artistPayload?.data) ? artistPayload.data[0] : artistPayload?.data;
@@ -183,7 +184,7 @@ function createTidalArtistDetails(options = {}) {
     timing.totalMs = Date.now() - startedAt;
     console.log('[Artist Details timing]', JSON.stringify({ artistId: String(artistId), artist: artist.name, ...timing }));
 
-    return { artist, topTracks, albums, singles, radio, similarArtists, biography: null, appearsOn, source: 'TIDAL + HEOS hybrid' };
+    return { artist, topTracks: [], albums, singles, radio, similarArtists, biography: null, appearsOn, source: 'TIDAL + HEOS hybrid' };
   }
 
   function remember(id, value, createdAt) {
@@ -225,6 +226,45 @@ function createTidalArtistDetails(options = {}) {
     return startRefresh(id);
   }
 
+  function rememberTopTracks(id, value, createdAt) {
+    topTracksCache.set(id, { value, createdAt, expiresAt: Date.now() + ARTIST_DETAILS_TTL_MS });
+  }
+
+  function startTopTracksRefresh(id) {
+    if (topTracksInFlight.has(id)) return topTracksInFlight.get(id);
+    const promise = (async () => {
+      const value = await getAllTracks(id);
+      const createdAt = Date.now();
+      rememberTopTracks(id, value, createdAt);
+      try { topTracksStore.write(id, value, createdAt); }
+      catch (error) { console.warn('TIDAL Artist Top Tracks persistent cache write failed:', error.message); }
+      return { tracks: value, cached: false, cacheAgeMs: 0, cacheSource: 'refresh' };
+    })();
+    topTracksInFlight.set(id, promise);
+    promise.finally(() => { if (topTracksInFlight.get(id) === promise) topTracksInFlight.delete(id); }).catch(() => {});
+    return promise;
+  }
+
+  async function getArtistTopTracks(artistId, options = {}) {
+    const id = String(artistId || '').trim();
+    if (!/^\d+$/.test(id)) throw new Error('Artist id must contain digits only');
+    const forceRefresh = options.forceRefresh === true;
+    const cached = topTracksCache.get(id);
+    if (!forceRefresh && cached && Date.now() < cached.expiresAt) {
+      return { tracks: cached.value, cached: true, cacheAgeMs: Date.now() - cached.createdAt, cacheSource: 'memory' };
+    }
+    if (!forceRefresh) {
+      const disk = topTracksStore.read(id);
+      if (disk) {
+        rememberTopTracks(id, disk.value, disk.createdAt);
+        if (!disk.fresh) startTopTracksRefresh(id).catch(error => console.warn('TIDAL Artist Top Tracks background refresh failed:', error.message));
+        return { tracks: disk.value, cached: true, cacheAgeMs: disk.ageMs, cacheSource: disk.fresh ? 'disk' : 'disk-stale', refreshing: !disk.fresh };
+      }
+      if (topTracksInFlight.has(id)) return topTracksInFlight.get(id);
+    }
+    return startTopTracksRefresh(id);
+  }
+
   async function getArtistBiography(artistId, options = {}) {
     const id = String(artistId || '').trim();
     if (!/^\d+$/.test(id)) throw new Error('Artist id must contain digits only');
@@ -238,7 +278,7 @@ function createTidalArtistDetails(options = {}) {
     return biographyResolver.getBiography({ artistId: id, name, albumTitles }, options);
   }
 
-  return { getArtistDetails, getArtistBiography };
+  return { getArtistDetails, getArtistTopTracks, getArtistBiography };
 }
 
 module.exports = { createTidalArtistDetails };
