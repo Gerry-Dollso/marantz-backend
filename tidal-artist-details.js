@@ -180,16 +180,10 @@ function createTidalArtistDetails(options = {}) {
     const radioResource = resources(radioPayload, 'playlists')[0] || null;
     const radio = radioResource ? { playlistId: String(radioResource.id || ''), name: String(radioResource.attributes?.name || radioResource.attributes?.title || artist.name || '') } : null;
 
-    const biography = await biographyResolver.getBiography({
-      artistId: artist.id,
-      name: artist.name,
-      albumTitles: [...albums, ...singles, ...appearsOn].map(item => item.name || item.title).filter(Boolean)
-    });
-    mark('biographyMs');
     timing.totalMs = Date.now() - startedAt;
     console.log('[Artist Details timing]', JSON.stringify({ artistId: String(artistId), artist: artist.name, ...timing }));
 
-    return { artist, topTracks, albums, singles, radio, similarArtists, biography, appearsOn, source: 'TIDAL + HEOS hybrid' };
+    return { artist, topTracks, albums, singles, radio, similarArtists, biography: null, appearsOn, source: 'TIDAL + HEOS hybrid' };
   }
 
   function remember(id, value, createdAt) {
@@ -231,7 +225,20 @@ function createTidalArtistDetails(options = {}) {
     return startRefresh(id);
   }
 
-  return { getArtistDetails };
+  async function getArtistBiography(artistId, options = {}) {
+    const id = String(artistId || '').trim();
+    if (!/^\d+$/.test(id)) throw new Error('Artist id must contain digits only');
+    const details = await getArtistDetails(id);
+    const artist = details?.artist || {};
+    const name = String(artist.name || '').trim();
+    if (!name) return null;
+    const albumTitles = [...(details.albums || []), ...(details.singles || []), ...(details.appearsOn || [])]
+      .map(item => item.name || item.title)
+      .filter(Boolean);
+    return biographyResolver.getBiography({ artistId: id, name, albumTitles }, options);
+  }
+
+  return { getArtistDetails, getArtistBiography };
 }
 
 module.exports = { createTidalArtistDetails };

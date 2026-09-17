@@ -2204,6 +2204,19 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  if (req.method === 'GET' && req.url.startsWith('/api/tidal/artist-biography?')) {
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      const artistId = url.searchParams.get('id') || '';
+      const biography = await tidalArtistDetails.getArtistBiography(artistId, {
+        forceRefresh: url.searchParams.get('refresh') === '1'
+      });
+      return sendJson(res, 200, { ok: true, artistId: String(artistId), biography });
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: error.message });
+    }
+  }
+
   if (req.method === 'GET' && req.url.startsWith('/api/tidal/artist/albums?')) {
     try {
       const url = new URL(req.url, 'http://localhost');
