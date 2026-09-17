@@ -6,7 +6,7 @@ const { createTidalArtistDetailsStore } = require('./tidal-artist-details-store'
 const ARTIST_DETAILS_TTL_MS = 15 * 60 * 1000;
 const MAX_TRACK_PAGES = 50;
 const TOP_TRACK_LIMIT = 10;
-const APPEARS_ON_PREVIEW_LIMIT = 4;
+const RELEASE_PREVIEW_LIMIT = 3;
 
 function createTidalArtistDetails(options = {}) {
   const apiGet = options.apiGet;
@@ -154,11 +154,11 @@ function createTidalArtistDetails(options = {}) {
     const artistPayload = await apiGet('/artists/' + encodeURIComponent(artistId) + '?include=profileArt&countryCode=' + encodeURIComponent(countryCode));
     mark('artistProfileMs');
     await pause();
-    const albumsHeos = await heosArtistCategory(artistId, 'Albums');
+    const albumsHeos = await heosArtistCategory(artistId, 'Albums', RELEASE_PREVIEW_LIMIT);
     mark('albumsHeosMs');
-    const singlesHeos = await heosArtistCategory(artistId, 'EP n Singles');
+    const singlesHeos = await heosArtistCategory(artistId, 'EP n Singles', RELEASE_PREVIEW_LIMIT);
     mark('singlesHeosMs');
-    const appearsOnHeos = await heosArtistCategory(artistId, 'Other Albums', APPEARS_ON_PREVIEW_LIMIT);
+    const appearsOnHeos = await heosArtistCategory(artistId, 'Other Albums', RELEASE_PREVIEW_LIMIT);
     mark('appearsOnHeosMs');
     await pause();
     const radioPayload = await relationship(artistId, 'radio', 'radio,radio.coverArt,radio.items');
