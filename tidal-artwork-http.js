@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const path = require('path');
 const { createTidalArtworkCache } = require('./tidal-artwork-cache');
 
 function createTidalArtworkHttp(options = {}) {
@@ -9,6 +10,30 @@ function createTidalArtworkHttp(options = {}) {
   const queued = new Set();
   let workers = 0;
   const concurrency = Math.max(1, Math.min(4, Number(options.concurrency) || 2));
+  const statePath = path.join(cache.stats().root, 'library-state.json');
+  let libraryState = { version: 1, artistKeys: null, albumKeys: null };
+
+  function loadLibraryState() {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+      if (parsed?.version === 1) {
+        libraryState = {
+          version: 1,
+          artistKeys: Array.isArray(parsed.artistKeys) ? parsed.artistKeys : null,
+          albumKeys: Array.isArray(parsed.albumKeys) ? parsed.albumKeys : null
+        };
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') console.warn('TIDAL artwork library state load failed:', error.message);
+    }
+  }
+
+  function saveLibraryState() {
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    const temp = statePath + '.tmp';
+    fs.writeFileSync(temp, JSON.stringify(libraryState, null, 2) + '\n', 'utf8');
+    fs.renameSync(temp, statePath);
+  }
 
   function itemIdentity(kind, item) {
     const id = String(item?.id || '').trim();
@@ -52,6 +77,22 @@ function createTidalArtworkHttp(options = {}) {
       enqueue(identity);
       return item;
     });
+  }
+
+  function noteCompleteLibrary(kind, items) {
+    if (kind !== 'artist' && kind !== 'album') throw new Error('Unsupported library housekeeping kind');
+    if (!Array.isArray(items)) return { updated: false, reconciled: false };
+    const keys = items.map(item => {
+      const id = String(item?.id || '').trim();
+      return id ? cache.keyFor(kind, id) : null;
+    }).filter(Boolean);
+    libraryState[kind + 'Keys'] = Array.from(new Set(keys));
+    saveLibraryState();
+    if (!Array.isArray(libraryState.artistKeys) || !Array.isArray(libraryState.albumKeys)) {
+      return { updated: true, reconciled: false };
+    }
+    const activeKeys = new Set([...libraryState.artistKeys, ...libraryState.albumKeys]);
+    return { updated: true, reconciled: true, ...cache.reconcile(activeKeys) };
   }
 
   function decorateLibraryResult(kind, field, result) {
@@ -102,7 +143,8 @@ function createTidalArtworkHttp(options = {}) {
     return { ...cache.stats(), queued: populateQueue.length, workers, concurrency };
   }
 
-  return { cache, decorateItems, decorateLibraryResult, serve, stats };
+  loadLibraryState();
+  return { cache, decorateItems, decorateLibraryResult, noteCompleteLibrary, serve, stats };
 }
 
 module.exports = { createTidalArtworkHttp };
