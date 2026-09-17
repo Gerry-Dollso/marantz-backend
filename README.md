@@ -1,61 +1,47 @@
 # marantz-backend
 
 <!-- ARTIST_CACHE_HANDOVER_2026_09_17 -->
-## 2026-09-17 — Artist landing performance checkpoint (backend accepted; final Pi redesign pending)
+## 2026-09-17 — Rich TIDAL Artist page production accepted
 
-The governing architecture remains **official TIDAL API for what the user sees; HEOS for what the user hears**. Do not treat the richer Artist Page as fully finished yet: the backend performance architecture below is live and runtime-proven, but the final compact 8-inch Pi Artist landing redesign and touchscreen acceptance are still pending.
+The richer Artist Page phase is now **complete and accepted on the physical 8-inch 1080p MarantzPi touchscreen**. The governing architecture remains **official TIDAL API for what the user sees; HEOS for what the user hears**.
 
-### Current accepted HP backend architecture
+### Accepted architecture
 
-Artist Details core is deliberately separated from expensive secondary enrichment. The landing core keeps official TIDAL artist metadata/artwork, HEOS-backed release previews, Artist Radio and Similar Artists, but **Top Tracks and biography no longer block the core Artist Details response**. Biography is available lazily through `GET /api/tidal/artist-biography?id=<id>`. Top Tracks is available lazily through `GET /api/tidal/artist-top-tracks?id=<id>`.
+Artist Details core is deliberately separated from expensive secondary enrichment. The landing core keeps official TIDAL artist metadata/artwork, HEOS-backed release previews, Artist Radio and Similar Artists. Top Tracks and biography load lazily and persist independently, so they do not block the core Artist landing response.
 
-HEOS landing release previews are now genuinely bounded at the backend to **3 Albums, 3 EPs & Singles and 3 Appears On** entries. Do not revert to fetching complete HEOS release categories for the landing page. Full-list views must be loaded lazily from dedicated/full retrieval paths rather than assuming the truncated core payload is complete.
+The landing layout is now intentionally bounded to **4 genuine popularity-ranked Top Tracks in a fixed 2x2**, **3 Albums**, **3 EPs & Singles** and **3 Appears On**. Full release categories are not packed into the landing payload. The compact category control loads the complete requested HEOS category on demand and enriches those exact release identities with official TIDAL metadata/artwork. The backend route is GET /api/tidal/artist-releases?id=<artistId>&category=<albums|singles|appears>; the Pi proxies the same route. Do not deduplicate releases merely because titles/artwork appear similar: separate TIDAL catalogue versions are legitimate unless identity evidence proves otherwise.
 
-Top Tracks correctness is non-negotiable. Official TIDAL Artist `tracks` relationships do not expose a documented server-side popularity sort or a separate app-ranked Top Tracks relationship. Existing `getAllTracks()` therefore crawls the Artist track relationship, de-duplicates and sorts by official TIDAL `popularity`, then keeps the ranked result. Earlier empirical testing proved raw relationship order is not Top Tracks order: for the tested artist, `Judith` was 12th in raw relationship order but ranked #1 after official popularity sorting, matching the TIDAL app. **Never replace this with the first four raw relationship tracks.** The landing UI may display only four, but the genuine ranking calculation remains authoritative.
+Top Tracks correctness remains non-negotiable. Official TIDAL Artist track relationships do not provide the app's Top Tracks order, so the backend crawls the relationship, de-duplicates, sorts by official TIDAL popularity, and persistently stores the ranked top 10. The landing shows the first four; the full Top Tracks page shows all 10. Never replace this with the first four raw relationship tracks. Production endpoint: GET /api/tidal/artist-top-tracks?id=<artistId>, optional refresh=1; persistent store: /var/lib/marantz-backend/artist-top-tracks/<artistId>.json.
 
-Top Tracks is now lazy and persistently cached. Production endpoint: `GET /api/tidal/artist-top-tracks?id=<artistId>`, with optional `refresh=1`. The persistent store is `/var/lib/marantz-backend/artist-top-tracks/<artistId>.json`, using atomic temp-file/rename writes, 24-hour freshness and a 30-day maximum stale window. It retains the existing 15-minute memory cache, in-flight de-duplication and stale-while-refresh behaviour. Current backend code stores the existing **top 10 ranked tracks**; the planned landing view displays the first four. Do not call those 10 a complete artist track list.
+Biography is also lazy and persistent through GET /api/tidal/artist-biography?id=<artistId> and /var/lib/marantz-backend/artist-biographies/<artistId>.json. Null biography results are valid and persisted; not every artist has a resolved biography. The MusicBrainz -> Wikidata -> Wikipedia enrichment chain remains unchanged.
 
-Runtime proof used favourite artist **TRICKY, TIDAL ID 27444**. Before the 3/3/3 release limit, forced Artist Details took **20.532 s**. After 3/3/3 it took **14.258 s**, with Top Tracks still consuming **10.318 s**. After removing Top Tracks from the critical path, forced core Artist Details took **3.894 s**. The first separate lazy Top Tracks request took **10.455 s**, the immediate RAM hit took **0.000781 s**, and after a complete `marantz-backend.service` restart the same request took **0.002326 s** with `cached:true`, `cacheSource:'disk'`, `trackCount:10`. The verified first four were `Hell Is Round The Corner`, `Black Steel`, `Overcome`, `Aftermath`. This proves the expensive genuine ranking is moved off the landing critical path and survives process restart.
+Persistent backend roots are /var/lib/marantz-backend/artwork, /var/lib/marantz-backend/artist-details, /var/lib/marantz-backend/artist-top-tracks and /var/lib/marantz-backend/artist-biographies. A sequential cache warmer, ai/warm-tidal-artist-cache.js, pre-populates favourite Artist details, Top Tracks and biography without hammering external services. The completed pass processed 391 of 392 favourite artists; BODEGA TIDAL ID 3644091 was the single HTTP 429 failure and should not be repeatedly hammered. BODEGA IDs 3644091 and 43627077 are separate TIDAL profiles for the same real-world band and must not be automatically merged.
 
-### Production checkpoints through this handover
+### Runtime and touchscreen acceptance
 
-Backend repository `Gerry-Dollso/marantz-backend`, branch `local-ai-development`, runtime `/opt/marantz-backend`, system service `marantz-backend.service`, HTTP port 3100.
+Backend full-category production checkpoint is **c1d578f — Add full Artist release loading**. The Afghan Whigs, TIDAL Artist ID 672, Albums endpoint returned **14/14**, from Soft Control through Up In It, with official TIDAL enrichment. The measured full-category request was about **0.875 s**, so no additional full-category cache layer was required.
 
-- `97a09d6 — Optimize Artist Details cold loading`
-- `aa34f70 — Make Artist biography load lazily`
-- `3172044 — Limit Artist landing release previews`
-- `d7debb5 — Add persistent Artist Top Tracks store`
-- `3d93282 — Add guarded lazy persistent Artist Top Tracks updater`
-- `ef89872 — Add guarded Artist Top Tracks route updater`
-- `0994b54 — Make Artist Top Tracks lazy and persistent`
+Companion Pi production checkpoint is **c5841e6 — Load full Artist categories on demand** on branch housekeeping-2026-08-21. The Pi -> HP proxy was runtime-proven with the same Afghan Whigs **14/14** result. Physical touchscreen acceptance then confirmed the Artist headers/categories open their complete lists, the landing remains bounded after returning from a full category, and the intended **3-release previews / 4-Top-Tracks landing** is restored on Back. This is the acceptance boundary: backend curl/syntax tests alone are never sufficient for MarantzPi UI completion.
 
-The production Top Tracks changes passed `node --check server.js`, `node --check tidal-artist-details.js` and `git diff --check`, were runtime-proven as above, committed as `0994b54`, and pushed to `origin/local-ai-development` before this documentation roll-up.
+The Pi lazy-load implementation uses the Artist request token/current Artist ID as a navigation guard, so a late release, Top Tracks or biography response cannot update a different Artist page after navigation. Existing album drill-in and track actions remain on their established HEOS-backed paths.
 
-### Persistent caches — backend architecture accepted
+### Production checkpoints
 
-Persistent roots are now `/var/lib/marantz-backend/artwork`, `/var/lib/marantz-backend/artist-details`, `/var/lib/marantz-backend/artist-top-tracks` and `/var/lib/marantz-backend/artist-biographies`. Artwork list performance was fixed by batching touch-index writes; accepted timings were about **0.0189 s for Artists** and **0.0466 s for Albums**. The Pi binary artwork proxy regression was also fixed and touchscreen-confirmed for both lists.
+Backend repository Gerry-Dollso/marantz-backend, branch local-ai-development, runtime /opt/marantz-backend, system service marantz-backend.service, HTTP port 3100. Current accepted Artist production head before this documentation roll-up: **c1d578f**.
 
-Biography is now lazy **and persistently cached**. `tidal-artist-biography-store.js` stores one versioned JSON record per numeric Artist ID under `/var/lib/marantz-backend/artist-biographies/<artistId>.json`, using atomic temp-file/rename writes, **7-day freshness** and a **30-day maximum stale window**. The existing RAM cache and in-flight de-duplication remain. Fresh disk values survive a complete backend restart; stale-but-usable biographies return immediately while one background refresh replaces the record. Null biography results can also be persisted so repeatedly unresolved artists do not continually repeat expensive external lookups. The MusicBrainz -> Wikidata -> Wikipedia resolution logic itself was not changed.
+Companion Pi repository Gerry-Dollso/marantzPI, branch housekeeping-2026-08-21, runtime ~/marantz-now-playing, user service marantz-display.service, HTTP port 3000. Current accepted Artist production head before its documentation roll-up: **c5841e6**.
 
-Runtime acceptance used **TRICKY, TIDAL ID 27444**. A forced cold biography refresh took **6.642 s** and wrote a version-1 persistent record with a Wikipedia biography. After a complete `marantz-backend.service` restart, the normal biography request took **0.015 s**, proving disk persistence. The record was then deliberately aged to 8 days old, the backend restarted to clear RAM, and the stale request returned in **0.016 s**. Background refresh subsequently replaced the deliberately old `2026-09-09T15:44:19.297Z` timestamp with fresh `2026-09-17T15:47:07.667Z`, with the Wikipedia biography intact. This proves restart persistence and stale-while-refresh end to end.
-
-Biography persistence production checkpoints: `6103aa3 — Add persistent Artist biography store` and `aa8f276 — Persist Artist biographies across restarts`. Both touched JavaScript files passed `node --check` and `git diff --check`; runtime acceptance passed as above. At the completion of this test, local HEAD and `origin/local-ai-development` both reported `aa8f276` with a blank working-tree status. The remaining Artist phase work is now the Pi UI/full-list redesign and real 8-inch touchscreen acceptance, not further biography persistence.
-
-### Immediate next work — do not skip touchscreen acceptance
-
-Before changing Pi source, inspect the actual GitHub state of `Gerry-Dollso/marantzPI`, branch `housekeeping-2026-08-21`; do not ask the user to grep source that GitHub can provide. The physical MarantzPi uses an **8-inch 1080p touchscreen**.
-
-Agreed final landing design: **4 Top Tracks in a fixed 2×2 layout**, **3 Albums**, **3 EPs & Singles**, **3 Appears On**, no preview scrollbars, and a compact end-of-row full-list control such as `›` or `…` instead of the large SEE ALL control. Similar Artists should be inspected before deciding whether the same 3-item treatment applies. Core Artist Details should render immediately; Top Tracks and biography should fill asynchronously with a navigation/request-token guard so late responses cannot update a page the user has left.
-
-Because the core release arrays are now deliberately truncated, inspect and implement proper lazy full-list retrieval for Albums, EPs & Singles and Appears On. Existing SEE ALL/full-list behaviour must not silently show only the three preview entries. Likewise, the Top Tracks endpoint currently returns the ranked top 10; determine from the existing Pi UX whether the full Top Tracks page is intended to mean those 10 or something broader before labelling it.
-
-**Final acceptance must happen on the actual 8-inch touchscreen.** Backend syntax checks, diffs and curl timings are not sufficient. Verify fast core appearance, asynchronous Top Tracks/biography, fixed 2×2 Top Tracks, three-card release rows, no preview scrollbars, working compact full-list controls, genuinely complete intended full-list pages, and safe navigation while lazy requests are in flight. Only after that acceptance should Pi documentation say the redesign is complete.
+Important Artist-phase checkpoints include 97a09d6 core performance, 3172044 3/3/3 release previews, 0994b54 lazy persistent Top Tracks, 6103aa3/aa8f276 persistent biography, eb5885a sequential Artist cache warmer, and c1d578f full release loading. Companion Pi checkpoints include 05ce9f1 persistent artwork proxy, 228cb39 8-inch layout, b141a76 lazy rich Artist data and c5841e6 full categories on demand.
 
 ### Mandatory working method
 
 The user works primarily from Android phone/tablet using Termius. Commands must be single-line, short, sequential and copy/paste safe; label HP/Pi and read-only/mutating, then wait for output. A 👍🏻 means agree/continue and can represent expected blank output. Use GitHub first for repository inspection and substantial/interconnected edits; Termius is for runtime evidence, deployment/testing and small bounded edits. Never guess source/API shapes when GitHub or the official TIDAL OpenAPI can answer them. Before new TIDAL API probes, inspect the current official OpenAPI. User-entered/name-based search still uses HEOS; official TIDAL rich metadata is available once an exact Artist ID is known.
 
-For touched JavaScript run `node --check`; before restart/commit run `git diff --check` and inspect the actual diff. HP `marantz-backend.service` is a system service; Pi `marantz-display.service` is a user service. Never touch `marantz-mic-stream.service`. Credentials stay outside Git in `/etc/marantz-backend/tidal.env`. Finish accepted checkpoints committed/pushed with blank `git status --short`.
+For touched JavaScript run node --check; before restart/commit run git diff --check and inspect the actual diff. HP marantz-backend.service is a system service; Pi marantz-display.service is a user service. Never touch marantz-mic-stream.service. Credentials stay outside Git in /etc/marantz-backend/tidal.env. Finish accepted checkpoints committed/pushed with blank git status --short.
+
+### Next work
+
+The richer Artist Page is no longer the active unfinished task. **Track Radio remains deliberately on the back burner.** Any next feature should start from these accepted clean checkpoints rather than reopening Artist-page architecture that has already passed physical touchscreen acceptance.
 
 <!-- TASK3_TIDAL_LANDING_MIXES_2026_09_16 -->
 ## 2026-09-16 — TIDAL landing / Mixes & Radio accepted
