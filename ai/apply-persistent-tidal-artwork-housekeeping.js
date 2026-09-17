@@ -16,13 +16,13 @@ function replaceOnce(label, before, after) {
 replaceOnce(
   'artist housekeeping',
   "      const artists = tidalArtworkHttp.decorateItems('artist', Array.isArray(official.items) ? official.items.map(artist => ({\n        ...artist,\n        cid: 'LIBARTIST-' + artist.id\n      })) : []);\n      return sendJson(res, 200, {\n",
-  "      const artists = tidalArtworkHttp.decorateItems('artist', Array.isArray(official.items) ? official.items.map(artist => ({\n        ...artist,\n        cid: 'LIBARTIST-' + artist.id\n      })) : []);\n      if (!official.stale && !official.refreshing && Number(official.staleReferenceCount || 0) === 0) {\n        tidalArtworkHttp.noteCompleteLibrary('artist', artists);\n      }\n      return sendJson(res, 200, {\n"
+  "      const artists = tidalArtworkHttp.decorateItems('artist', Array.isArray(official.items) ? official.items.map(artist => ({\n        ...artist,\n        cid: 'LIBARTIST-' + artist.id\n      })) : []);\n      if (!official.stale && !official.refreshing) {\n        tidalArtworkHttp.noteCompleteLibrary('artist', artists);\n      }\n      return sendJson(res, 200, {\n"
 );
 
 replaceOnce(
   'album housekeeping',
   "      const albums = tidalArtworkHttp.decorateItems('album', Array.isArray(official.items) ? official.items.map(album => ({\n        ...album,\n        cid: 'LIBALBUM-' + album.id\n      })) : []);\n      return sendJson(res, 200, {\n",
-  "      const albums = tidalArtworkHttp.decorateItems('album', Array.isArray(official.items) ? official.items.map(album => ({\n        ...album,\n        cid: 'LIBALBUM-' + album.id\n      })) : []);\n      if (!official.stale && !official.refreshing && Number(official.staleReferenceCount || 0) === 0) {\n        tidalArtworkHttp.noteCompleteLibrary('album', albums);\n      }\n      return sendJson(res, 200, {\n"
+  "      const albums = tidalArtworkHttp.decorateItems('album', Array.isArray(official.items) ? official.items.map(album => ({\n        ...album,\n        cid: 'LIBALBUM-' + album.id\n      })) : []);\n      if (!official.stale && !official.refreshing) {\n        tidalArtworkHttp.noteCompleteLibrary('album', albums);\n      }\n      return sendJson(res, 200, {\n"
 );
 
 fs.writeFileSync(target, source, 'utf8');
