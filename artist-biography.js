@@ -1,5 +1,7 @@
 'use strict';
 
+const { createTidalArtistBiographyStore } = require('./tidal-artist-biography-store');
+
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MUSICBRAINZ_GAP_MS = 1100;
 const TRANSIENT_RETRIES = 2;
@@ -9,6 +11,7 @@ const USER_AGENT = 'MarantzPi/1.0 (personal music display)';
 function createArtistBiography(options = {}) {
   const fetchImpl = options.fetch || global.fetch;
   if (typeof fetchImpl !== 'function') throw new Error('fetch is required');
+  const persistentStore = options.persistentStore || createTidalArtistBiographyStore(options.persistentStoreOptions);
 
   const cache = new Map();
   const inFlight = new Map();
@@ -123,6 +126,32 @@ function createArtistBiography(options = {}) {
     return wikipediaFromMusicBrainz(candidate.id);
   }
 
+  function remember(key, value, createdAt) {
+    cache.set(key, { value, createdAt, expiresAt: Date.now() + CACHE_TTL_MS });
+  }
+
+  function startRefresh(key, artistId, input) {
+    if (inFlight.has(key)) return inFlight.get(key);
+    const promise = (async () => {
+      try {
+        const value = await load(input);
+        const createdAt = Date.now();
+        remember(key, value, createdAt);
+        if (/^\d+$/.test(artistId)) {
+          try { persistentStore.write(artistId, value, createdAt); }
+          catch (error) { console.warn('Artist biography persistent cache write failed:', error.message); }
+        }
+        return value;
+      } catch (error) {
+        console.warn('Artist biography lookup failed:', String(input?.name || '').trim(), error.message);
+        return null;
+      }
+    })();
+    inFlight.set(key, promise);
+    promise.finally(() => { if (inFlight.get(key) === promise) inFlight.delete(key); }).catch(() => {});
+    return promise;
+  }
+
   async function getBiography(input, options = {}) {
     const artistId = String(input?.artistId || '').trim();
     const name = String(input?.name || '').trim();
@@ -131,19 +160,16 @@ function createArtistBiography(options = {}) {
     const forceRefresh = options.forceRefresh === true;
     const cached = cache.get(key);
     if (!forceRefresh && cached && Date.now() < cached.expiresAt) return cached.value;
-    if (!forceRefresh && inFlight.has(key)) return inFlight.get(key);
-    const promise = (async () => {
-      try {
-        const value = await load(input);
-        cache.set(key, { value, expiresAt: Date.now() + CACHE_TTL_MS });
-        return value;
-      } catch (error) {
-        console.warn('Artist biography lookup failed:', name, error.message);
-        return null;
+    if (!forceRefresh && /^\d+$/.test(artistId)) {
+      const disk = persistentStore.read(artistId);
+      if (disk) {
+        remember(key, disk.value, disk.createdAt);
+        if (!disk.fresh) startRefresh(key, artistId, input).catch(error => console.warn('Artist biography background refresh failed:', error.message));
+        return disk.value;
       }
-    })();
-    inFlight.set(key, promise);
-    try { return await promise; } finally { if (inFlight.get(key) === promise) inFlight.delete(key); }
+    }
+    if (!forceRefresh && inFlight.has(key)) return inFlight.get(key);
+    return startRefresh(key, artistId, input);
   }
 
   return { getBiography };
