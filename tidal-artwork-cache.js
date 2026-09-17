@@ -13,6 +13,7 @@ function createTidalArtworkCache(options = {}) {
   const indexPath = path.join(root, 'index.json');
   const inFlight = new Map();
   let index = { version: INDEX_VERSION, entries: {} };
+  let pendingIndexSave = null;
 
   function ensureDirectories() {
     fs.mkdirSync(filesDir, { recursive: true });
@@ -31,10 +32,23 @@ function createTidalArtworkCache(options = {}) {
   }
 
   function saveIndex() {
+    if (pendingIndexSave) {
+      clearTimeout(pendingIndexSave);
+      pendingIndexSave = null;
+    }
     ensureDirectories();
     const temp = indexPath + '.tmp';
     fs.writeFileSync(temp, JSON.stringify(index, null, 2) + '\n', 'utf8');
     fs.renameSync(temp, indexPath);
+  }
+
+  function scheduleIndexSave() {
+    if (pendingIndexSave) return;
+    pendingIndexSave = setTimeout(() => {
+      pendingIndexSave = null;
+      saveIndex();
+    }, 1000);
+    pendingIndexSave.unref?.();
   }
 
   function normaliseKind(kind) {
@@ -137,7 +151,7 @@ function createTidalArtworkCache(options = {}) {
     if (!entry) return false;
     entry.lastSeenAt = new Date().toISOString();
     if (sourceUrl) entry.sourceUrl = String(sourceUrl);
-    saveIndex();
+    scheduleIndexSave();
     return true;
   }
 
