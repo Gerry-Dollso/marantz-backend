@@ -6,6 +6,7 @@ const { createTidalArtistDetailsStore } = require('./tidal-artist-details-store'
 const ARTIST_DETAILS_TTL_MS = 15 * 60 * 1000;
 const MAX_TRACK_PAGES = 50;
 const TOP_TRACK_LIMIT = 10;
+const APPEARS_ON_PREVIEW_LIMIT = 4;
 
 function createTidalArtistDetails(options = {}) {
   const apiGet = options.apiGet;
@@ -77,21 +78,23 @@ function createTidalArtistDetails(options = {}) {
     };
   }
 
-  async function heosArtistCategory(artistId, category) {
+  async function heosArtistCategory(artistId, category, limit = null) {
     const cid = `LIBARTIST-${category}-${artistId}`;
     const rows = [];
     let start = 0;
     let total = null;
-    while (total === null || start < total) {
+    const requestedLimit = Number.isInteger(limit) && limit > 0 ? limit : null;
+    while ((total === null || start < total) && (requestedLimit === null || rows.length < requestedLimit)) {
       const encodedCid = encodeURIComponent(cid).replace(/%20/g, ' ');
-      const response = await heosBrowse(`heos://browse/browse?sid=10&cid=${encodedCid}&range=${start},${start + 49}`);
+      const pageSize = requestedLimit === null ? 50 : Math.min(50, requestedLimit - rows.length);
+      const response = await heosBrowse(`heos://browse/browse?sid=10&cid=${encodedCid}&range=${start},${start + pageSize - 1}`);
       const payload = Array.isArray(response.payload) ? response.payload : [];
-      rows.push(...payload);
+      rows.push(...payload.slice(0, pageSize));
       const match = String(response.heos?.message || '').match(/(?:^|&)count=(\d+)/);
       if (match) total = Number(match[1]);
       if (payload.length === 0) break;
       start += payload.length;
-      if (total === null && payload.length < 50) break;
+      if (total === null && payload.length < pageSize) break;
     }
     return { cid, total, rows };
   }
@@ -139,23 +142,39 @@ function createTidalArtistDetails(options = {}) {
   }
 
   async function load(artistId) {
+    const startedAt = Date.now();
+    let stageAt = startedAt;
+    const timing = {};
+    const mark = name => {
+      const now = Date.now();
+      timing[name] = now - stageAt;
+      stageAt = now;
+    };
     const pause = () => new Promise(resolve => setTimeout(resolve, 250));
     const artistPayload = await apiGet('/artists/' + encodeURIComponent(artistId) + '?include=profileArt&countryCode=' + encodeURIComponent(countryCode));
+    mark('artistProfileMs');
     await pause();
     const albumsHeos = await heosArtistCategory(artistId, 'Albums');
+    mark('albumsHeosMs');
     const singlesHeos = await heosArtistCategory(artistId, 'EP n Singles');
-    const appearsOnHeos = await heosArtistCategory(artistId, 'Other Albums');
+    mark('singlesHeosMs');
+    const appearsOnHeos = await heosArtistCategory(artistId, 'Other Albums', APPEARS_ON_PREVIEW_LIMIT);
+    mark('appearsOnHeosMs');
     await pause();
     const radioPayload = await relationship(artistId, 'radio', 'radio,radio.coverArt,radio.items');
+    mark('radioMs');
     await pause();
     const similarPayload = await relationship(artistId, 'similarArtists', 'similarArtists.profileArt');
+    mark('similarArtistsMs');
     await pause();
     const topTracks = await getAllTracks(artistId);
+    mark('topTracksMs');
 
     const artistArt = artworkMap(artistPayload);
     const artistResource = Array.isArray(artistPayload?.data) ? artistPayload.data[0] : artistPayload?.data;
     const artist = mapArtist(artistResource, artistArt);
     const [albums, singles, appearsOn] = await enrichHeosAlbums([albumsHeos.rows, singlesHeos.rows, appearsOnHeos.rows]);
+    mark('albumMetadataEnrichmentMs');
     const similarArt = artworkMap(similarPayload);
     const similarArtists = resources(similarPayload, 'artists').map(item => mapArtist(item, similarArt));
     const radioResource = resources(radioPayload, 'playlists')[0] || null;
@@ -166,6 +185,9 @@ function createTidalArtistDetails(options = {}) {
       name: artist.name,
       albumTitles: [...albums, ...singles, ...appearsOn].map(item => item.name || item.title).filter(Boolean)
     });
+    mark('biographyMs');
+    timing.totalMs = Date.now() - startedAt;
+    console.log('[Artist Details timing]', JSON.stringify({ artistId: String(artistId), artist: artist.name, ...timing }));
 
     return { artist, topTracks, albums, singles, radio, similarArtists, biography, appearsOn, source: 'TIDAL + HEOS hybrid' };
   }
