@@ -12,9 +12,10 @@ function createTidalArtworkHttp(options = {}) {
 
   function itemIdentity(kind, item) {
     const id = String(item?.id || '').trim();
-    const imageUrl = String(item?.imageUrl || '').trim();
+    const field = typeof item?.artwork === 'string' && item.artwork.trim() ? 'artwork' : 'imageUrl';
+    const imageUrl = String(item?.[field] || '').trim();
     if (!id || !/^https:\/\//i.test(imageUrl)) return null;
-    return { kind, id, imageUrl, key: cache.keyFor(kind, id) };
+    return { kind, id, field, imageUrl, key: cache.keyFor(kind, id) };
   }
 
   function pump() {
@@ -46,7 +47,7 @@ function createTidalArtworkHttp(options = {}) {
       const local = cache.resolve(kind, identity.id);
       if (local && local.sourceUrl === identity.imageUrl) {
         cache.touch(kind, identity.id, identity.imageUrl);
-        return { ...item, imageUrl: local.url };
+        return { ...item, [identity.field]: local.url };
       }
       enqueue(identity);
       return item;
