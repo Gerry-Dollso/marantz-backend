@@ -265,6 +265,17 @@ function createTidalArtistDetails(options = {}) {
     return startTopTracksRefresh(id);
   }
 
+  async function getArtistReleases(artistId, category) {
+    const id = String(artistId || '').trim();
+    if (!/^\d+$/.test(id)) throw new Error('Artist id must contain digits only');
+    const categories = { albums: 'Albums', singles: 'EP n Singles', appears: 'Other Albums' };
+    const heosCategory = categories[String(category || '').trim()];
+    if (!heosCategory) throw new Error('Invalid Artist release category');
+    const result = await heosArtistCategory(id, heosCategory);
+    const [releases] = await enrichHeosAlbums([result.rows]);
+    return { category: String(category), total: Number.isFinite(result.total) ? result.total : releases.length, releases };
+  }
+
   async function getArtistBiography(artistId, options = {}) {
     const id = String(artistId || '').trim();
     if (!/^\d+$/.test(id)) throw new Error('Artist id must contain digits only');
@@ -278,7 +289,7 @@ function createTidalArtistDetails(options = {}) {
     return biographyResolver.getBiography({ artistId: id, name, albumTitles }, options);
   }
 
-  return { getArtistDetails, getArtistTopTracks, getArtistBiography };
+  return { getArtistDetails, getArtistTopTracks, getArtistReleases, getArtistBiography };
 }
 
 module.exports = { createTidalArtistDetails };
