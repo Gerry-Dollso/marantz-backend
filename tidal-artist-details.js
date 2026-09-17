@@ -1,6 +1,7 @@
 'use strict';
 
 const { createArtistBiography } = require('./artist-biography');
+const { createTidalArtistDetailsStore } = require('./tidal-artist-details-store');
 
 const ARTIST_DETAILS_TTL_MS = 15 * 60 * 1000;
 const MAX_TRACK_PAGES = 50;
@@ -15,6 +16,7 @@ function createTidalArtistDetails(options = {}) {
   if (typeof getAlbumMetadata !== 'function') throw new Error('getAlbumMetadata is required');
   if (typeof heosBrowse !== 'function') throw new Error('heosBrowse is required');
   const biographyResolver = options.biographyResolver || createArtistBiography();
+  const persistentStore = options.persistentStore || createTidalArtistDetailsStore(options.persistentStoreOptions);
 
   const cache = new Map();
   const inFlight = new Map();
@@ -168,21 +170,43 @@ function createTidalArtistDetails(options = {}) {
     return { artist, topTracks, albums, singles, radio, similarArtists, biography, appearsOn, source: 'TIDAL + HEOS hybrid' };
   }
 
+  function remember(id, value, createdAt) {
+    cache.set(id, { value, createdAt, expiresAt: Date.now() + ARTIST_DETAILS_TTL_MS });
+  }
+
+  function startRefresh(id) {
+    if (inFlight.has(id)) return inFlight.get(id);
+    const promise = (async () => {
+      const value = await load(id);
+      const createdAt = Date.now();
+      remember(id, value, createdAt);
+      try { persistentStore.write(id, value, createdAt); }
+      catch (error) { console.warn('TIDAL Artist Details persistent cache write failed:', error.message); }
+      return { ...value, cached: false, cacheAgeMs: 0, cacheSource: 'refresh' };
+    })();
+    inFlight.set(id, promise);
+    promise.finally(() => { if (inFlight.get(id) === promise) inFlight.delete(id); }).catch(() => {});
+    return promise;
+  }
+
   async function getArtistDetails(artistId, options = {}) {
     const id = String(artistId || '').trim();
     if (!/^\d+$/.test(id)) throw new Error('Artist id must contain digits only');
     const forceRefresh = options.forceRefresh === true;
     const cached = cache.get(id);
-    if (!forceRefresh && cached && Date.now() < cached.expiresAt) return { ...cached.value, cached: true, cacheAgeMs: Date.now() - cached.createdAt };
-    if (!forceRefresh && inFlight.has(id)) return inFlight.get(id);
-    const promise = (async () => {
-      const value = await load(id);
-      const createdAt = Date.now();
-      cache.set(id, { value, createdAt, expiresAt: createdAt + ARTIST_DETAILS_TTL_MS });
-      return { ...value, cached: false, cacheAgeMs: 0 };
-    })();
-    inFlight.set(id, promise);
-    try { return await promise; } finally { if (inFlight.get(id) === promise) inFlight.delete(id); }
+    if (!forceRefresh && cached && Date.now() < cached.expiresAt) {
+      return { ...cached.value, cached: true, cacheAgeMs: Date.now() - cached.createdAt, cacheSource: 'memory' };
+    }
+    if (!forceRefresh) {
+      const disk = persistentStore.read(id);
+      if (disk) {
+        remember(id, disk.value, disk.createdAt);
+        if (!disk.fresh) startRefresh(id).catch(error => console.warn('TIDAL Artist Details background refresh failed:', error.message));
+        return { ...disk.value, cached: true, cacheAgeMs: disk.ageMs, cacheSource: disk.fresh ? 'disk' : 'disk-stale', refreshing: !disk.fresh };
+      }
+      if (inFlight.has(id)) return inFlight.get(id);
+    }
+    return startRefresh(id);
   }
 
   return { getArtistDetails };
