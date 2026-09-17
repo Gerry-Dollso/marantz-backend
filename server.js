@@ -24,6 +24,7 @@ const {
 const {
   createTidalBrowseCache
 } = require('./tidal-browse-cache');
+const { createTidalArtworkHttp } = require('./tidal-artwork-http');
 const {
   createTidalHeosResolver
 } = require('./tidal-heos-resolver');
@@ -39,6 +40,7 @@ const HTTP_PORT = 3100;
 const AI_FALLBACK_ENABLED = process.env.MARANTZ_AI_FALLBACK === '1';
 const tidalMetadata = createTidalMetadataClient({ countryCode: 'GB' });
 const tidalBrowseCache = createTidalBrowseCache({ maxEntries: 64 });
+const tidalArtworkHttp = createTidalArtworkHttp({ concurrency: 2 });
 
 const tidalUserAuthRecon = createTidalUserAuthRecon({
   countryCode: 'GB'
@@ -1891,6 +1893,11 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  {
+    const artworkUrl = new URL(req.url, 'http://localhost');
+    if (tidalArtworkHttp.serve(req, res, artworkUrl.pathname)) return;
+  }
+
   if (req.method === 'GET' && req.url.startsWith('/api/tidal/probe-favourite-tracks-heos-validation')) {
     try {
       const bridge = await getFavouriteTracksLibraryBridge();
@@ -1904,10 +1911,13 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url.startsWith('/api/tidal/favourite-artists')) {
     try {
       const official = await tidalUserAuthRecon.getFavouriteArtists();
-      const artists = Array.isArray(official.items) ? official.items.map(artist => ({
+      const artists = tidalArtworkHttp.decorateItems('artist', Array.isArray(official.items) ? official.items.map(artist => ({
         ...artist,
         cid: 'LIBARTIST-' + artist.id
-      })) : [];
+      })) : []);
+      if (!official.stale && !official.refreshing) {
+        tidalArtworkHttp.noteCompleteLibrary('artist', artists);
+      }
       return sendJson(res, 200, {
         ok: true,
         readOnly: true,
@@ -1930,10 +1940,13 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url.startsWith('/api/tidal/favourite-albums')) {
     try {
       const official = await tidalUserAuthRecon.getFavouriteAlbums();
-      const albums = Array.isArray(official.items) ? official.items.map(album => ({
+      const albums = tidalArtworkHttp.decorateItems('album', Array.isArray(official.items) ? official.items.map(album => ({
         ...album,
         cid: 'LIBALBUM-' + album.id
-      })) : [];
+      })) : []);
+      if (!official.stale && !official.refreshing) {
+        tidalArtworkHttp.noteCompleteLibrary('album', albums);
+      }
       return sendJson(res, 200, {
         ok: true,
         readOnly: true,
