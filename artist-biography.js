@@ -90,7 +90,20 @@ function createArtistBiography(options = {}) {
         if ((details.aliases || []).some(alias => normalise(alias?.name) === wantedName)) aliasMatches.push(candidate);
       }
     }
-    const nameMatches = exact.length ? exact : aliasMatches;
+    let nameMatches = exact.length ? exact : aliasMatches;
+    if (!nameMatches.length) {
+      const broadQuery = encodeURIComponent(String(name || '').replace(/"/g, ''));
+      const broadSearch = await musicBrainzJson('https://musicbrainz.org/ws/2/artist/?query=' + broadQuery + '&fmt=json&limit=8');
+      const broadExact = (broadSearch.artists || []).filter(item => normalise(item?.name) === wantedName);
+      const broadAliasMatches = [];
+      if (!broadExact.length) {
+        for (const candidate of (broadSearch.artists || []).slice(0, 5)) {
+          const details = await musicBrainzJson('https://musicbrainz.org/ws/2/artist/' + encodeURIComponent(candidate.id) + '?inc=aliases&fmt=json');
+          if ((details.aliases || []).some(alias => normalise(alias?.name) === wantedName)) broadAliasMatches.push(candidate);
+        }
+      }
+      nameMatches = broadExact.length ? broadExact : broadAliasMatches;
+    }
     if (!nameMatches.length) return null;
 
     const candidates = [];
