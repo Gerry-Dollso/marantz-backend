@@ -116,13 +116,13 @@ function createArtistBiography(options = {}) {
     candidates.sort((a, b) => b.score - a.score);
     const best = candidates[0];
     const second = candidates[1];
+    console.warn('Artist biography MusicBrainz resolver diagnostic:', { name, albumTitles, candidates: candidates.map(item => ({ id: item.candidate?.id, name: item.candidate?.name, score: item.score })) });
     if (!best || best.score < 1) return null;
     if (second && best.score - second.score < 0.5) return null;
     return best.candidate;
   }
 
   async function wikipediaFromVerifiedMusicBrainzName(mbid, name) {
-    console.warn('Artist biography Wikipedia fallback diagnostic:', { mbid, name });
     const searchUrl = 'https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=' + encodeURIComponent(name) + '&gsrnamespace=0&gsrlimit=5&prop=pageprops&ppprop=wikibase_item&format=json&formatversion=2';
     const search = await fetchJson(searchUrl, { 'User-Agent': USER_AGENT });
     const pages = search?.query?.pages || [];
