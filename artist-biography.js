@@ -65,7 +65,7 @@ function createArtistBiography(options = {}) {
     return fetchJson(url, { 'User-Agent': USER_AGENT });
   }
 
-  const normaliseReleaseTitle = value => normalise(value).replace(/\\s*\\(remastered\\)$/, '').trim();
+  const normaliseReleaseTitle = value => normalise(value).replace(/\s*\(remastered\)$/, '').trim();
 
   function releaseTitleSet(releaseGroups) {
     return new Set((releaseGroups || []).map(item => normaliseReleaseTitle(item?.title)).filter(Boolean));
