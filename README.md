@@ -1,5 +1,20 @@
 # marantz-backend
 
+## 2026-09-18 — Biography resolver completion checkpoint
+
+The Artist biography resolver is now considered complete. Production checkpoint: **55d1145 — Handle redirected Wikidata biography entities**.
+
+Biography identity remains deliberately conservative. The resolver first confirms a MusicBrainz artist by normalized canonical name or alias and requires release-title evidence from the artist's **full live HEOS Albums catalogue**, not the three-item landing preview. Unicode punctuation is normalized and a trailing `(Remastered)` suffix is ignored for release-title comparison. Ambiguous candidates still fail closed.
+
+Once MusicBrainz identity is established, the preferred chain remains MusicBrainz URL relation -> Wikidata -> English Wikipedia. If the confirmed MusicBrainz artist has no Wikidata relation, the resolver may search up to five English Wikipedia candidates, but accepts one only when its Wikidata **P434 MusicBrainz artist ID exactly contains the already-confirmed MBID**. This is an identity check, not fuzzy biography matching. Wikidata redirects/merged entity IDs are resolved before reading the English Wikipedia sitelink; this fixed Eric Hilton, whose old linked QID resolves to Q48869100.
+
+These general fixes recovered genuine biographies including **Mos Def / Yasiin Bey, Scratch Acid, Crystal Fairy and Eric Hilton**. Pretty Lightning was separately verified as the sole exact MusicBrainz artist with all five current HEOS albums matching MusicBrainz release groups, but neither MusicBrainz nor the Wikipedia fallback provides a valid linked biography, so NULL is correct. Similar remaining obscure artists may legitimately remain NULL.
+
+**Meatbodies must remain NULL under current upstream data.** The catalogue strongly confirms MusicBrainz ID `3ed638a7-5188-4be6-918c-9bbd68890b58`, while the existing Meatbodies Wikidata entity points P434 at a different/older MusicBrainz identity. Do not weaken P434 verification, add a one-artist exception, or substitute name-only Wikipedia matching to force this biography. If the upstream MusicBrainz/Wikidata linkage is corrected, the existing resolver should pick it up naturally.
+
+Negative biography cache entries are intentional valid results. Do not treat the remaining NULL population as a target percentage to optimize, and do not weaken deterministic artist identity merely to increase biography coverage. A wrong biography is worse than no biography.
+
+
 <!-- ARTIST_CACHE_HANDOVER_2026_09_17 -->
 ## 2026-09-17 — Rich TIDAL Artist page production accepted
 
