@@ -116,7 +116,6 @@ function createArtistBiography(options = {}) {
     candidates.sort((a, b) => b.score - a.score);
     const best = candidates[0];
     const second = candidates[1];
-    console.warn('Artist biography MusicBrainz resolver diagnostic:', { name, albumTitles, candidates: candidates.map(item => ({ id: item.candidate?.id, name: item.candidate?.name, score: item.score })) });
     if (!best || best.score < 1) return null;
     if (second && best.score - second.score < 0.5) return null;
     return best.candidate;
@@ -147,6 +146,7 @@ function createArtistBiography(options = {}) {
     const relations = await musicBrainzJson('https://musicbrainz.org/ws/2/artist/' + encodeURIComponent(mbid) + '?inc=url-rels&fmt=json');
     const wikidata = (relations.relations || []).find(rel => rel?.type === 'wikidata' && rel?.url?.resource);
     const qid = wikidata?.url?.resource?.match(/(Q\d+)$/)?.[1];
+    console.warn('Artist biography MusicBrainz relations diagnostic:', { mbid, name, wikidataResource: wikidata?.url?.resource || null, qid: qid || null });
     if (!qid) return wikipediaFromVerifiedMusicBrainzName(mbid, name);
 
     const entity = await fetchJson('https://www.wikidata.org/wiki/Special:EntityData/' + encodeURIComponent(qid) + '.json');
