@@ -18,7 +18,12 @@ function createArtistBiography(options = {}) {
   let lastMusicBrainzRequestAt = 0;
 
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-  const normalise = value => String(value || '').trim().toLowerCase();
+  const normalise = value => String(value || '')
+    .normalize('NFKC')
+    .replace(/[\u2010-\u2015\u2212]/g, '-')
+    .replace(/[\u2018\u2019\u02BC]/g, "'")
+    .trim()
+    .toLowerCase();
 
   function teaser(text) {
     const clean = String(text || '').replace(/\s+/g, ' ').trim();
@@ -76,11 +81,20 @@ function createArtistBiography(options = {}) {
   async function resolveMusicBrainz(name, albumTitles) {
     const query = encodeURIComponent('artist:"' + String(name || '').replace(/"/g, '') + '"');
     const search = await musicBrainzJson('https://musicbrainz.org/ws/2/artist/?query=' + query + '&fmt=json&limit=8');
-    const exact = (search.artists || []).filter(item => normalise(item?.name) === normalise(name));
-    if (!exact.length) return null;
+    const wantedName = normalise(name);
+    const exact = (search.artists || []).filter(item => normalise(item?.name) === wantedName);
+    const aliasMatches = [];
+    if (!exact.length) {
+      for (const candidate of (search.artists || []).slice(0, 5)) {
+        const details = await musicBrainzJson('https://musicbrainz.org/ws/2/artist/' + encodeURIComponent(candidate.id) + '?inc=aliases&fmt=json');
+        if ((details.aliases || []).some(alias => normalise(alias?.name) === wantedName)) aliasMatches.push(candidate);
+      }
+    }
+    const nameMatches = exact.length ? exact : aliasMatches;
+    if (!nameMatches.length) return null;
 
     const candidates = [];
-    for (const candidate of exact.slice(0, 5)) {
+    for (const candidate of nameMatches.slice(0, 5)) {
       const releases = await musicBrainzJson('https://musicbrainz.org/ws/2/release-group?artist=' + encodeURIComponent(candidate.id) + '&fmt=json&limit=100');
       candidates.push({ candidate, score: scoreCandidate(candidate, albumTitles, releases['release-groups']) });
     }
