@@ -122,6 +122,7 @@ function createArtistBiography(options = {}) {
   }
 
   async function wikipediaFromVerifiedMusicBrainzName(mbid, name) {
+    console.warn('Artist biography Wikipedia fallback diagnostic:', { mbid, name });
     const searchUrl = 'https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=' + encodeURIComponent(name) + '&gsrnamespace=0&gsrlimit=5&prop=pageprops&ppprop=wikibase_item&format=json&formatversion=2';
     const search = await fetchJson(searchUrl, { 'User-Agent': USER_AGENT });
     const pages = search?.query?.pages || [];
