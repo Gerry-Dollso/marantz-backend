@@ -508,6 +508,27 @@ function createTidalUserAuthRecon(options = {}) {
         artwork: item.artwork || null
       }));
 
+    // Daily Discovery is exposed through TIDAL's dedicated discovery-mix
+    // relationship but is not necessarily present in the saved MIX collection.
+    // Merge it into the broader shelf without removing or duplicating saved MIXes.
+    const discovery = await apiGetRaw(
+      '/userDiscoveryMixes/me?include=items&countryCode=' + encodeURIComponent(countryCode)
+    );
+    const discoveryPlaylist = (Array.isArray(discovery?.included) ? discovery.included : [])
+      .find(item => item?.type === 'playlists' && item?.id);
+    if (
+      discoveryPlaylist &&
+      !playlists.some(item => item.id === String(discoveryPlaylist.id))
+    ) {
+      playlists.push({
+        id: String(discoveryPlaylist.id),
+        name: playlistName(discoveryPlaylist) || 'My Daily Discovery',
+        kind: 'mix',
+        description: '',
+        artwork: null
+      });
+    }
+
     const value = {
       playlists,
       referenceCount: relationship.ids.length,
