@@ -146,12 +146,13 @@ function createArtistBiography(options = {}) {
     const relations = await musicBrainzJson('https://musicbrainz.org/ws/2/artist/' + encodeURIComponent(mbid) + '?inc=url-rels&fmt=json');
     const wikidata = (relations.relations || []).find(rel => rel?.type === 'wikidata' && rel?.url?.resource);
     const qid = wikidata?.url?.resource?.match(/(Q\d+)$/)?.[1];
-    console.warn('Artist biography MusicBrainz relations diagnostic:', { mbid, name, wikidataResource: wikidata?.url?.resource || null, qid: qid || null });
     if (!qid) return wikipediaFromVerifiedMusicBrainzName(mbid, name);
 
     const entity = await fetchJson('https://www.wikidata.org/wiki/Special:EntityData/' + encodeURIComponent(qid) + '.json');
-    const title = entity?.entities?.[qid]?.sitelinks?.enwiki?.title;
-    if (!title) return null;
+    const resolvedQid = entity?.entities?.[qid] ? qid : Object.keys(entity?.entities || {})[0];
+    const resolvedEntity = resolvedQid ? entity?.entities?.[resolvedQid] : null;
+    const title = resolvedEntity?.sitelinks?.enwiki?.title;
+    if (!title) return wikipediaFromVerifiedMusicBrainzName(mbid, name);
 
     const summary = await fetchJson('https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(title), {
       'User-Agent': USER_AGENT
@@ -164,7 +165,7 @@ function createArtistBiography(options = {}) {
       source: 'Wikipedia',
       sourceUrl: String(summary?.content_urls?.desktop?.page || ''),
       musicBrainzId: mbid,
-      wikidataId: qid,
+      wikidataId: resolvedQid || qid,
       wikipediaTitle: title
     };
   }
