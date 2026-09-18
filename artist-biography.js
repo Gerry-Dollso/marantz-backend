@@ -65,13 +65,15 @@ function createArtistBiography(options = {}) {
     return fetchJson(url, { 'User-Agent': USER_AGENT });
   }
 
+  const normaliseReleaseTitle = value => normalise(value).replace(/\\s*\\(remastered\\)$/, '').trim();
+
   function releaseTitleSet(releaseGroups) {
-    return new Set((releaseGroups || []).map(item => normalise(item?.title)).filter(Boolean));
+    return new Set((releaseGroups || []).map(item => normaliseReleaseTitle(item?.title)).filter(Boolean));
   }
 
   function scoreCandidate(candidate, albumTitles, releaseGroups) {
     let score = 0;
-    const wanted = new Set((albumTitles || []).map(normalise).filter(Boolean));
+    const wanted = new Set((albumTitles || []).map(normaliseReleaseTitle).filter(Boolean));
     const known = releaseTitleSet(releaseGroups);
     for (const title of wanted) if (known.has(title)) score += 1;
     if (candidate?.disambiguation) score += 0.05;
