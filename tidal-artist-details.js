@@ -283,7 +283,11 @@ function createTidalArtistDetails(options = {}) {
     const artist = details?.artist || {};
     const name = String(artist.name || '').trim();
     if (!name) return null;
-    const albumTitles = [...(details.albums || []), ...(details.singles || []), ...(details.appearsOn || [])]
+    // Biography identity matching must not depend on the three-item landing previews.
+    // Use the full HEOS Albums category as conservative MusicBrainz release evidence;
+    // keep the fast 3/3/3 Artist landing unchanged.
+    const fullAlbums = await heosArtistCategory(id, 'Albums');
+    const albumTitles = (fullAlbums.rows || [])
       .map(item => item.name || item.title)
       .filter(Boolean);
     return biographyResolver.getBiography({ artistId: id, name, albumTitles }, options);
