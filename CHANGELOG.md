@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-18 — Mixes & Radio favourite-MIX source
+
+The production Mixes & Radio shelf uses the user's saved/favourite official TIDAL playlist collection as its canonical membership source and keeps only playlist resources whose `playlistType` is `MIX`. Playlist metadata is resolved through the existing official TIDAL playlist metadata path, including the playlist `coverArt` relationship; do not synthesize a track-art collage when official playlist cover art is available.
+
+**My Daily Discovery must be saved/favourited in TIDAL to appear on this shelf.** This was verified live: after favouriting My Daily Discovery, the normal collection path returned 20 MIX playlists and supplied official artwork. A temporary special-case merge from `userDiscoveryMixes` was removed in checkpoint `895629c — Remove Daily Discovery merge workaround`. Do not restore that special case unless the product design intentionally stops using favourites as canonical membership.
+
+The 2026-09-18 known-good recovery snapshot is branch `backup-known-good-2026-09-18`, fixed at pre-cleanup SHA `351ccee1e02826060534d3546a53f70d06d5e101`. Treat that branch as read-only and never develop on or move it.
+
 ## 2026-09-18 — Biography resolver completion checkpoint
 
 The Artist biography resolver is now considered complete. Production checkpoint: **55d1145 — Handle redirected Wikidata biography entities**.
