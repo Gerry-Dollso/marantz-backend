@@ -127,7 +127,7 @@ function createArtistBiography(options = {}) {
     const pages = search?.query?.pages || [];
     for (const page of pages) {
       const qid = page?.pageprops?.wikibase_item;
-      if (!/^Q\\d+$/.test(String(qid || ''))) continue;
+      if (!/^Q\d+$/.test(String(qid || ''))) continue;
       const entity = await fetchJson('https://www.wikidata.org/wiki/Special:EntityData/' + encodeURIComponent(qid) + '.json');
       const claims = entity?.entities?.[qid]?.claims?.P434 || [];
       const mbids = claims.map(claim => claim?.mainsnak?.datavalue?.value).filter(Boolean);
@@ -135,7 +135,7 @@ function createArtistBiography(options = {}) {
       const title = entity?.entities?.[qid]?.sitelinks?.enwiki?.title;
       if (!title) continue;
       const summary = await fetchJson('https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(title), { 'User-Agent': USER_AGENT });
-      const text = String(summary?.extract || '').replace(/\\s+/g, ' ').trim();
+      const text = String(summary?.extract || '').replace(/\s+/g, ' ').trim();
       if (!text) continue;
       return { text, teaser: teaser(text), source: 'Wikipedia', sourceUrl: String(summary?.content_urls?.desktop?.page || ''), musicBrainzId: mbid, wikidataId: qid, wikipediaTitle: title };
     }
