@@ -2067,7 +2067,12 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url.startsWith('/api/tidal/favourite-tracks')) {
     try {
       const official = await tidalUserAuthRecon.getFavouriteTracks();
-      const tracks = Array.isArray(official.tracks) ? official.tracks : [];
+      const tracks = tidalArtworkHttp.decorateTracksByAlbum(
+        Array.isArray(official.tracks) ? official.tracks : []
+      );
+      if (!official.stale && !official.refreshing) {
+        tidalArtworkHttp.noteFavouriteTrackAlbums(tracks);
+      }
       return sendJson(res, 200, {
         ok: true,
         readOnly: true,
