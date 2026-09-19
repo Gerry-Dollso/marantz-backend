@@ -175,13 +175,6 @@ function createTidalArtistDetails(options = {}) {
     const artistPayload = await apiGet('/artists/' + encodeURIComponent(artistId) + '?include=profileArt&countryCode=' + encodeURIComponent(countryCode));
     mark('artistProfileMs');
     await pause();
-    const albumsHeos = await heosArtistCategory(artistId, 'Albums', RELEASE_PREVIEW_LIMIT);
-    mark('albumsHeosMs');
-    const singlesHeos = await heosArtistCategory(artistId, 'EP n Singles', RELEASE_PREVIEW_LIMIT);
-    mark('singlesHeosMs');
-    const appearsOnHeos = await heosArtistCategory(artistId, 'Other Albums', RELEASE_PREVIEW_LIMIT);
-    mark('appearsOnHeosMs');
-    await pause();
     const radioPayload = await relationship(artistId, 'radio', 'radio,radio.coverArt,radio.items');
     mark('radioMs');
     await pause();
@@ -191,8 +184,6 @@ function createTidalArtistDetails(options = {}) {
     const artistArt = artworkMap(artistPayload);
     const artistResource = Array.isArray(artistPayload?.data) ? artistPayload.data[0] : artistPayload?.data;
     const artist = mapArtist(artistResource, artistArt);
-    const [albums, singles, appearsOn] = await enrichHeosAlbums([albumsHeos.rows, singlesHeos.rows, appearsOnHeos.rows]);
-    mark('albumMetadataEnrichmentMs');
     const similarArt = artworkMap(similarPayload);
     const similarArtists = resources(similarPayload, 'artists').map(item => mapArtist(item, similarArt));
     const radioResource = resources(radioPayload, 'playlists')[0] || null;
@@ -201,7 +192,7 @@ function createTidalArtistDetails(options = {}) {
     timing.totalMs = Date.now() - startedAt;
     console.log('[Artist Details timing]', JSON.stringify({ artistId: String(artistId), artist: artist.name, ...timing }));
 
-    return { artist, topTracks: [], albums, singles, radio, similarArtists, biography: null, appearsOn, source: 'TIDAL + HEOS hybrid' };
+    return { artist, topTracks: [], albums: [], singles: [], radio, similarArtists, biography: null, appearsOn: [], source: 'TIDAL artist profile' };
   }
 
   function remember(id, value, createdAt) {
