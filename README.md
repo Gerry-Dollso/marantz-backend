@@ -1,5 +1,16 @@
 # marantz-backend
 
+## 2026-09-19 — Favourite Tracks album-art cache accepted
+
+Favourite Tracks now reuses the persistent artwork cache by **TIDAL album ID** instead of leaving track thumbnails on direct TIDAL CDN URLs or creating duplicate per-track cache entries. This is intentional: the accepted 594-track library contains 492 unique albums, and live reconciliation proved every previously cached overlapping album used the exact same artwork source URL as Favourite Tracks.
+
+`GET /api/tidal/favourite-tracks` decorates track artwork through `decorateTracksByAlbum()`. Existing exact album-cache hits return the local `/api/tidal/artwork/album/<id>` path immediately; missing covers retain their remote URL for the current response while the existing bounded two-worker artwork queue fills them in the background. `favouriteTrackAlbumKeys` is persisted alongside the existing artist/album library state and is included in the housekeeping active-key union, so Favourite-Tracks-only album covers are not treated as cache orphans.
+
+Production checkpoints: **ffe1b6d — Cache Favourite Tracks artwork by album** and **17e24b2 — Use album artwork cache for Favourite Tracks**. Deployment passed `node --check`, `git diff --check` and actual-diff inspection before restart. The first live 594-track response returned 436 local / 158 remote artwork rows; ten seconds later it returned **594 local / 0 remote**, with `stale:false` and `refreshing:false`.
+
+Physical MarantzPi touchscreen acceptance then passed a full normal and fast scroll through all 594 Favourite Tracks with **no missing artwork, hanging or stutter**. The backend remained active after the stress test; HP memory was 2.8 GiB used of 15 GiB with 12 GiB available and zero swap usage. Preserve album identity reuse and the bounded downloader; do not replace this with one cache object/download per track.
+
+
 ## 2026-09-18 — Mixes & Radio favourite-MIX source
 
 The production Mixes & Radio shelf uses the user's saved/favourite official TIDAL playlist collection as its canonical membership source and keeps only playlist resources whose `playlistType` is `MIX`. Playlist metadata is resolved through the existing official TIDAL playlist metadata path, including the playlist `coverArt` relationship; do not synthesize a track-art collage when official playlist cover art is available.
