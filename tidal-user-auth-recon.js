@@ -1855,6 +1855,18 @@ async function probeSearch() {
       }
     }
 
+    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe-album') {
+      try {
+        const albumId = requestUrl.searchParams.get('id') || '';
+        if (!/^\d+$/.test(albumId)) throw new Error('Invalid album id');
+        const include = 'artists,coverArt,items,owners,providers,similarAlbums,usageRules';
+        const payload = await apiGetRaw('/albums/' + encodeURIComponent(albumId) + '?include=' + encodeURIComponent(include) + '&countryCode=GB');
+        return sendJson(res, 200, { ok: true, albumId, include: include.split(','), payload });
+      } catch (error) {
+        return sendJson(res, 400, { ok: false, error: error.message });
+      }
+    }
+
     if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe-artist-albums') {
       try {
         const artistId = requestUrl.searchParams.get('id') || '';
