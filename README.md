@@ -1,3 +1,13 @@
+## 2026-09-19 — Artist release cache/filter redesign accepted
+
+Artist landing no longer performs HEOS release-preview enumeration. The landing core returns the Artist profile, Artist Radio and Similar Artists; legacy release arrays remain empty for frontend compatibility. Full **Albums**, **EPs & Singles** and **Appears On** membership is loaded lazily through `GET /api/tidal/artist-releases?id=<id>&category=<albums|singles|appears>` only when the user opens a category.
+
+Official TIDAL album metadata is now persisted by exact numeric album ID under `/var/lib/marantz-backend/album-metadata`. Album metadata/artwork is treated as effectively immutable for normal browsing and has no routine TTL; existing IDs are reused from SSD and only newly encountered IDs require official TIDAL enrichment. Mutable Artist details, Top Tracks and biography use a 30-day fresh period, retain stale data rather than discarding it, and refresh on demand when that Artist is next used. There is no scheduled monthly refresh traffic.
+
+HEOS remains the playable catalogue/membership source for Artist release categories, with official TIDAL metadata enriching those exact identities. Release filtering is deliberately conservative. A lower-quality copy is hidden only when a strongly equivalent release family (normalized title + release date + album type + item count) contains a Hi-Res copy. Clearly different editions remain separate, and uncertain equal-quality duplicates remain visible rather than risking a false merge. Categories sort newest release date first. The Afghan Whigs control case reduced Albums from 14 catalogue rows to 10 by removing four strong lower-quality counterparts while deliberately retaining both ambiguous `1965` entries. EPs & Singles conservative duplicates were explicitly accepted as-is.
+
+Production checkpoints: **69b8490** (album type/version metadata), **1412001** (persistent album metadata cache), **fe53b23** (reuse metadata during Artist browse), **721c6d3** (conservative Hi-Res preference), **4b5c1f5/1065f43/e799823** (30-day demand-driven mutable Artist caches), and **f0ea53f** (remove release previews from Artist landing). Companion MarantzPi navigation/UI work is physically accepted and the release/navigation phase is closed.
+
 # marantz-backend
 
 ## 2026-09-19 — Favourite Tracks album-art cache accepted
