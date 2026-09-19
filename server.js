@@ -75,6 +75,7 @@ let favouriteTracksValidationRefresh = null;
 let favouriteTracksRollingSession = null;
 let favouriteTracksRollingReconcileTimer = null;
 let favouriteTracksRollingReconcilePromise = null;
+let favouriteTracksRollingWatchdogTimer = null;
 let heosEventSocket = null;
 let heosEventReconnectTimer = null;
 let ordinaryPlaylistsCache = null;
@@ -84,6 +85,8 @@ const FAVOURITE_TRACKS_ROLLING_INITIAL = 10;
 const FAVOURITE_TRACKS_ROLLING_LOW_WATER = 5;
 const FAVOURITE_TRACKS_ROLLING_BATCH = 5;
 const FAVOURITE_TRACKS_ROLLING_DEBOUNCE_MS = 750;
+const FAVOURITE_TRACKS_ROLLING_RETRY_MS = 5000;
+const FAVOURITE_TRACKS_ROLLING_WATCHDOG_MS = 30000;
 const FAVOURITE_TRACKS_VALIDATION_TTL_MS = 5 * 60 * 1000;
 const FAVOURITE_TRACKS_VALIDATION_MAX_AGE_MS = 30 * 60 * 1000;
 const voiceAliases = createVoiceAliasStore();
@@ -375,6 +378,10 @@ function stopFavouriteTracksRollingSession(reason = 'superseded') {
     clearTimeout(favouriteTracksRollingReconcileTimer);
     favouriteTracksRollingReconcileTimer = null;
   }
+  if (favouriteTracksRollingWatchdogTimer) {
+    clearInterval(favouriteTracksRollingWatchdogTimer);
+    favouriteTracksRollingWatchdogTimer = null;
+  }
   if (session) {
     console.log('TIDAL FAVOURITE ROLLING SESSION STOPPED:', JSON.stringify({
       generation: session.generation,
@@ -492,8 +499,17 @@ async function reconcileFavouriteTracksRollingSession() {
   try {
     await work;
   } catch (error) {
-    stopFavouriteTracksRollingSession('reconcile-failed');
-    console.error('TIDAL FAVOURITE ROLLING RECONCILE FAILED:', error.message);
+    console.warn('TIDAL FAVOURITE ROLLING RECONCILE RETRY:', JSON.stringify({
+      generation: session.generation,
+      queued: session.nextIndex,
+      total: session.tracks.length,
+      error: error.message
+    }));
+    if (favouriteTracksRollingSession === session && tidalQueueBuildIsCurrent(session.generation)) {
+      setTimeout(() => {
+        if (favouriteTracksRollingSession === session) scheduleFavouriteTracksRollingReconcile();
+      }, FAVOURITE_TRACKS_ROLLING_RETRY_MS);
+    }
   } finally {
     if (favouriteTracksRollingReconcilePromise === work) favouriteTracksRollingReconcilePromise = null;
   }
@@ -588,6 +604,11 @@ async function queueCanonicalFavouriteTracks({ tracks, shuffle = false, startInd
     startedAt: Date.now()
   };
   startHeosEventConnection();
+  favouriteTracksRollingWatchdogTimer = setInterval(
+    scheduleFavouriteTracksRollingReconcile,
+    FAVOURITE_TRACKS_ROLLING_WATCHDOG_MS
+  );
+  scheduleFavouriteTracksRollingReconcile();
 
   console.log('TIDAL FAVOURITE ROLLING SESSION STARTED:', JSON.stringify({
     generation,
