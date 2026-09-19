@@ -519,7 +519,9 @@ function scheduleFavouriteTracksRollingReconcile() {
   if (!favouriteTracksRollingSession || favouriteTracksRollingReconcileTimer) return;
   favouriteTracksRollingReconcileTimer = setTimeout(() => {
     favouriteTracksRollingReconcileTimer = null;
-    reconcileFavouriteTracksRollingSession();
+    reconcileFavouriteTracksRollingSession().catch(error => {
+      console.error('TIDAL FAVOURITE ROLLING SCHEDULER FAILED:', error);
+    });
   }, FAVOURITE_TRACKS_ROLLING_DEBOUNCE_MS);
 }
 
