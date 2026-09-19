@@ -282,6 +282,36 @@ function createTidalArtistDetails(options = {}) {
     return startTopTracksRefresh(id);
   }
 
+  function releaseHasHiRes(release) {
+    return Array.isArray(release?.mediaTags) && release.mediaTags.some(tag => String(tag).toUpperCase() === 'HIRES_LOSSLESS');
+  }
+
+  function releaseQualityFamilyKey(release) {
+    const title = String(release?.title || release?.name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    const date = String(release?.releaseDate || '').trim();
+    const type = String(release?.albumType || '').trim().toUpperCase();
+    const count = Number.isFinite(Number(release?.numberOfItems)) ? String(Number(release.numberOfItems)) : '';
+    return title && date && type && count ? [title, date, type, count].join('|') : null;
+  }
+
+  function filterAndSortReleases(releases) {
+    const hiResFamilies = new Set();
+    for (const release of releases) {
+      const key = releaseQualityFamilyKey(release);
+      if (key && releaseHasHiRes(release)) hiResFamilies.add(key);
+    }
+    return releases
+      .filter(release => {
+        const key = releaseQualityFamilyKey(release);
+        return !key || !hiResFamilies.has(key) || releaseHasHiRes(release);
+      })
+      .sort((a, b) => {
+        const byDate = String(b?.releaseDate || '').localeCompare(String(a?.releaseDate || ''));
+        if (byDate) return byDate;
+        return 0;
+      });
+  }
+
   async function getArtistReleases(artistId, category) {
     const id = String(artistId || '').trim();
     if (!/^\d+$/.test(id)) throw new Error('Artist id must contain digits only');
@@ -289,8 +319,9 @@ function createTidalArtistDetails(options = {}) {
     const heosCategory = categories[String(category || '').trim()];
     if (!heosCategory) throw new Error('Invalid Artist release category');
     const result = await heosArtistCategory(id, heosCategory);
-    const [releases] = await enrichHeosAlbums([result.rows]);
-    return { category: String(category), total: Number.isFinite(result.total) ? result.total : releases.length, releases };
+    const [enriched] = await enrichHeosAlbums([result.rows]);
+    const releases = filterAndSortReleases(enriched);
+    return { category: String(category), total: releases.length, releases };
   }
 
   async function getArtistBiography(artistId, options = {}) {
