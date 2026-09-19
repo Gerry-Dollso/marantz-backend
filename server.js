@@ -585,9 +585,21 @@ async function queueCanonicalFavouriteTracks({ tracks, shuffle = false, startInd
   const initialCount = Math.min(FAVOURITE_TRACKS_ROLLING_INITIAL, queueTracks.length);
   let queued = 0;
   for (let index = 0; index < initialCount; index += 1) {
-    const ok = await addFavouriteTrackToQueue(queueTracks[index], queued === 0 ? 4 : 3, generation);
-    if (!ok) return { cancelled: true, queued, skipped: 0, attempted: initialCount, shuffle, firstMid: '' };
-    queued += 1;
+    try {
+      const ok = await addFavouriteTrackToQueue(queueTracks[index], queued === 0 ? 4 : 3, generation);
+      if (!ok) return { cancelled: true, queued, skipped: 0, attempted: initialCount, shuffle, firstMid: '' };
+      queued += 1;
+    } catch (error) {
+      console.error('TIDAL FAVOURITE INITIAL QUEUE FAILED:', JSON.stringify({
+        generation,
+        slot: index + 1,
+        mid: String(queueTracks[index]?.id || ''),
+        queued,
+        attempted: initialCount,
+        error: error.message
+      }));
+      throw error;
+    }
   }
 
   await heosBrowse(
