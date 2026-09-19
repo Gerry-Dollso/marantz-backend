@@ -1855,6 +1855,26 @@ async function probeSearch() {
       }
     }
 
+    if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe-artist-albums') {
+      try {
+        const artistId = requestUrl.searchParams.get('id') || '';
+        if (!/^\d+$/.test(artistId)) throw new Error('Invalid artist id');
+        const payload = await apiGetRaw('/artists/' + encodeURIComponent(artistId) + '/relationships/albums?include=albums,albums.artists&countryCode=GB');
+        const albums = (Array.isArray(payload?.included) ? payload.included : []).filter(item => item?.type === 'albums').map(item => ({
+          id: String(item.id || ''),
+          title: String(item.attributes?.title || ''),
+          albumType: String(item.attributes?.albumType || item.attributes?.type || ''),
+          version: String(item.attributes?.version || ''),
+          releaseDate: String(item.attributes?.releaseDate || ''),
+          mediaTags: item.attributes?.mediaTags || [],
+          artistIds: (Array.isArray(item.relationships?.artists?.data) ? item.relationships.artists.data : []).map(artist => String(artist.id || ''))
+        }));
+        return sendJson(res, 200, { ok: true, artistId, relationshipCount: Array.isArray(payload?.data) ? payload.data.length : 0, albums });
+      } catch (error) {
+        return sendJson(res, 400, { ok: false, error: error.message });
+      }
+    }
+
     if (req.method === 'GET' && requestUrl.pathname === '/api/tidal/oauth/probe-artist') {
       try {
         const artistId = requestUrl.searchParams.get('id') || '';
