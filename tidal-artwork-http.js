@@ -11,7 +11,7 @@ function createTidalArtworkHttp(options = {}) {
   let workers = 0;
   const concurrency = Math.max(1, Math.min(4, Number(options.concurrency) || 2));
   const statePath = path.join(cache.stats().root, 'library-state.json');
-  let libraryState = { version: 1, artistKeys: null, albumKeys: null };
+  let libraryState = { version: 1, artistKeys: null, albumKeys: null, favouriteTrackAlbumKeys: null };
 
   function loadLibraryState() {
     try {
@@ -20,7 +20,8 @@ function createTidalArtworkHttp(options = {}) {
         libraryState = {
           version: 1,
           artistKeys: Array.isArray(parsed.artistKeys) ? parsed.artistKeys : null,
-          albumKeys: Array.isArray(parsed.albumKeys) ? parsed.albumKeys : null
+          albumKeys: Array.isArray(parsed.albumKeys) ? parsed.albumKeys : null,
+          favouriteTrackAlbumKeys: Array.isArray(parsed.favouriteTrackAlbumKeys) ? parsed.favouriteTrackAlbumKeys : null
         };
       }
     } catch (error) {
@@ -79,6 +80,42 @@ function createTidalArtworkHttp(options = {}) {
     });
   }
 
+  function decorateTracksByAlbum(items) {
+    if (!Array.isArray(items)) return items;
+    return items.map(item => {
+      const albumId = String(item?.albumId || '').trim();
+      const imageUrl = String(item?.artwork || '').trim();
+      if (!albumId || !/^https:\/\//i.test(imageUrl)) return item;
+      const key = cache.keyFor('album', albumId);
+      const local = cache.resolve('album', albumId);
+      if (local && local.sourceUrl === imageUrl) {
+        cache.touch('album', albumId, imageUrl);
+        return { ...item, artwork: local.url };
+      }
+      enqueue({ kind: 'album', id: albumId, field: 'artwork', imageUrl, key });
+      return item;
+    });
+  }
+
+  function noteFavouriteTrackAlbums(items) {
+    if (!Array.isArray(items)) return { updated: false, reconciled: false };
+    const keys = items.map(item => {
+      const id = String(item?.albumId || '').trim();
+      return id ? cache.keyFor('album', id) : null;
+    }).filter(Boolean);
+    libraryState.favouriteTrackAlbumKeys = Array.from(new Set(keys));
+    saveLibraryState();
+    if (!Array.isArray(libraryState.artistKeys) || !Array.isArray(libraryState.albumKeys)) {
+      return { updated: true, reconciled: false };
+    }
+    const activeKeys = new Set([
+      ...libraryState.artistKeys,
+      ...libraryState.albumKeys,
+      ...(libraryState.favouriteTrackAlbumKeys || [])
+    ]);
+    return { updated: true, reconciled: true, ...cache.reconcile(activeKeys) };
+  }
+
   function noteCompleteLibrary(kind, items) {
     if (kind !== 'artist' && kind !== 'album') throw new Error('Unsupported library housekeeping kind');
     if (!Array.isArray(items)) return { updated: false, reconciled: false };
@@ -91,7 +128,11 @@ function createTidalArtworkHttp(options = {}) {
     if (!Array.isArray(libraryState.artistKeys) || !Array.isArray(libraryState.albumKeys)) {
       return { updated: true, reconciled: false };
     }
-    const activeKeys = new Set([...libraryState.artistKeys, ...libraryState.albumKeys]);
+    const activeKeys = new Set([
+      ...libraryState.artistKeys,
+      ...libraryState.albumKeys,
+      ...(libraryState.favouriteTrackAlbumKeys || [])
+    ]);
     return { updated: true, reconciled: true, ...cache.reconcile(activeKeys) };
   }
 
@@ -144,7 +185,7 @@ function createTidalArtworkHttp(options = {}) {
   }
 
   loadLibraryState();
-  return { cache, decorateItems, decorateLibraryResult, noteCompleteLibrary, serve, stats };
+  return { cache, decorateItems, decorateTracksByAlbum, decorateLibraryResult, noteCompleteLibrary, noteFavouriteTrackAlbums, serve, stats };
 }
 
 module.exports = { createTidalArtworkHttp };
