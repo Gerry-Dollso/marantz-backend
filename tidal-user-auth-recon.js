@@ -1859,17 +1859,36 @@ async function probeSearch() {
       try {
         const artistId = requestUrl.searchParams.get('id') || '';
         if (!/^\d+$/.test(artistId)) throw new Error('Invalid artist id');
-        const payload = await apiGetRaw('/artists/' + encodeURIComponent(artistId) + '/relationships/albums?include=albums,albums.artists&countryCode=GB');
-        const albums = (Array.isArray(payload?.included) ? payload.included : []).filter(item => item?.type === 'albums').map(item => ({
-          id: String(item.id || ''),
-          title: String(item.attributes?.title || ''),
-          albumType: String(item.attributes?.albumType || item.attributes?.type || ''),
-          version: String(item.attributes?.version || ''),
-          releaseDate: String(item.attributes?.releaseDate || ''),
-          mediaTags: item.attributes?.mediaTags || [],
-          artistIds: (Array.isArray(item.relationships?.artists?.data) ? item.relationships.artists.data : []).map(artist => String(artist.id || ''))
-        }));
-        return sendJson(res, 200, { ok: true, artistId, relationshipCount: Array.isArray(payload?.data) ? payload.data.length : 0, albums });
+        const albums = [];
+        const seenIds = new Set();
+        const seenPages = new Set();
+        let next = '/artists/' + encodeURIComponent(artistId) + '/relationships/albums?include=albums,albums.artists&countryCode=GB';
+        let pages = 0;
+        while (next) {
+          if (pages >= FAVOURITE_TRACKS_MAX_PAGES) throw new Error('TIDAL Artist Albums pagination safety limit reached');
+          const path = normaliseApiPath(next);
+          if (seenPages.has(path)) throw new Error('TIDAL Artist Albums pagination repeated a page');
+          seenPages.add(path);
+          const payload = await apiGetRawWithRateLimitRetry(path, 'Artist Albums relationship page ' + (pages + 1));
+          for (const item of (Array.isArray(payload?.included) ? payload.included : []).filter(resource => resource?.type === 'albums')) {
+            const id = String(item.id || '');
+            if (seenIds.has(id)) continue;
+            seenIds.add(id);
+            albums.push({
+              id,
+              title: String(item.attributes?.title || ''),
+              albumType: String(item.attributes?.albumType || item.attributes?.type || ''),
+              version: String(item.attributes?.version || ''),
+              releaseDate: String(item.attributes?.releaseDate || ''),
+              mediaTags: item.attributes?.mediaTags || [],
+              artistIds: (Array.isArray(item.relationships?.artists?.data) ? item.relationships.artists.data : []).map(artist => String(artist.id || ''))
+            });
+          }
+          next = payload?.links?.next || null;
+          pages += 1;
+          if (next) await new Promise(resolve => setTimeout(resolve, FAVOURITE_TRACKS_RELATIONSHIP_PAGE_DELAY_MS));
+        }
+        return sendJson(res, 200, { ok: true, artistId, pages, relationshipCount: albums.length, albums });
       } catch (error) {
         return sendJson(res, 400, { ok: false, error: error.message });
       }
