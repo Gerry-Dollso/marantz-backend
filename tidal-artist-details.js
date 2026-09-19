@@ -3,6 +3,7 @@
 const { createArtistBiography } = require('./artist-biography');
 const { createTidalArtistDetailsStore } = require('./tidal-artist-details-store');
 const { createTidalArtistTopTracksStore } = require('./tidal-artist-top-tracks-store');
+const { createTidalAlbumMetadataStore } = require('./tidal-album-metadata-store');
 
 const ARTIST_DETAILS_TTL_MS = 15 * 60 * 1000;
 const MAX_TRACK_PAGES = 50;
@@ -20,6 +21,7 @@ function createTidalArtistDetails(options = {}) {
   const biographyResolver = options.biographyResolver || createArtistBiography();
   const persistentStore = options.persistentStore || createTidalArtistDetailsStore(options.persistentStoreOptions);
   const topTracksStore = options.topTracksStore || createTidalArtistTopTracksStore(options.topTracksStoreOptions);
+  const albumMetadataStore = options.albumMetadataStore || createTidalAlbumMetadataStore(options.albumMetadataStoreOptions);
 
   const cache = new Map();
   const inFlight = new Map();
@@ -135,13 +137,28 @@ function createTidalArtistDetails(options = {}) {
       const match = String(row?.cid || '').match(/^LIBALBUM-(\d+)$/);
       if (match) ids.push(match[1]);
     }
-    const metadata = await getAlbumMetadata(ids);
-    const byId = new Map(metadata.map(item => [String(item.id), item]));
+    const uniqueIds = Array.from(new Set(ids));
+    const byId = new Map();
+    const missingIds = [];
+    for (const id of uniqueIds) {
+      const cached = albumMetadataStore.read(id);
+      if (cached) byId.set(id, cached);
+      else missingIds.push(id);
+    }
+    if (missingIds.length) {
+      const metadata = await getAlbumMetadata(missingIds);
+      for (const item of metadata) {
+        const id = String(item.id);
+        byId.set(id, item);
+        try { albumMetadataStore.write(id, item); }
+        catch (error) { console.warn('TIDAL album metadata cache write failed:', id, error.message); }
+      }
+    }
     return groups.map(rows => rows.map(row => {
       const match = String(row?.cid || '').match(/^LIBALBUM-(\d+)$/);
       const item = match ? byId.get(match[1]) : null;
       if (item === undefined || item === null) return row;
-      return { ...row, albumId: item.id, name: item.title || row.name, title: item.title || row.title || row.name, artist: item.artist || row.artist, artistId: item.artistId, releaseDate: item.releaseDate, explicit: item.explicit, numberOfItems: item.numberOfItems, mediaTags: item.mediaTags, imageUrl: item.artwork || row.imageUrl };
+      return { ...row, albumId: item.id, name: item.title || row.name, title: item.title || row.title || row.name, artist: item.artist || row.artist, artistId: item.artistId, releaseDate: item.releaseDate, albumType: item.albumType, version: item.version, explicit: item.explicit, numberOfItems: item.numberOfItems, mediaTags: item.mediaTags, imageUrl: item.artwork || row.imageUrl };
     }));
   }
 
