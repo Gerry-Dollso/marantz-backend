@@ -1013,6 +1013,8 @@ function createTidalUserAuthRecon(options = {}) {
           artist: artistName,
           artistId: artist?.id ? String(artist.id) : null,
           releaseDate: resource.attributes?.releaseDate ? String(resource.attributes.releaseDate) : null,
+          albumType: resource.attributes?.albumType ? String(resource.attributes.albumType) : null,
+          version: resource.attributes?.version ? String(resource.attributes.version) : null,
           explicit: resource.attributes?.explicit === true,
           numberOfItems: Number.isFinite(Number(resource.attributes?.numberOfItems)) ? Number(resource.attributes.numberOfItems) : null,
           mediaTags: Array.isArray(resource.attributes?.mediaTags) ? resource.attributes.mediaTags.map(String) : [],
